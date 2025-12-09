@@ -39,3 +39,4 @@ Thumbs.db
 *.bak
 
 DB/chorame/yerel_veritabani/
+DB/chorame/multi_index_chroma_db/
