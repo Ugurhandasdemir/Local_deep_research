@@ -1,5 +1,4 @@
 import psycopg2
-from psycopg2.extras import execute_values
 from sentence_transformers import SentenceTransformer
 import json
 import os
@@ -35,14 +34,23 @@ def create_table(conn):
             CREATE TABLE documents (
                 id BIGSERIAL PRIMARY KEY,
                 chunk_id INT,
-                kaynak VARCHAR(255),
+                doc_id INT,
+                filename VARCHAR(255),
+                filepath TEXT,
                 metin TEXT,
                 embedding vector(384)
             );
         """)
         
+        # HNSW index oluştur (cosine distance için)
+        cursor.execute("""
+            CREATE INDEX ON documents 
+            USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 16, ef_construction = 64);
+        """)
+        
         conn.commit()
-        print("✓ Tablo başarıyla oluşturuldu")
+        print("✓ Tablo ve index başarıyla oluşturuldu")
     except Exception as e:
         print(f"✗ Tablo oluşturma hatası: {e}")
         conn.rollback()
@@ -63,32 +71,39 @@ def metni_parcala(metin, chunk_size=500, overlap=100):
     return parcalar
 
 # Veri ekle
-def insert_documents(conn, metinler):
+def insert_documents(conn, veriler):
     cursor = conn.cursor()
     model = SentenceTransformer("all-MiniLM-L6-v2")
     
     batch_size = 100
     total_inserted = 0
     
-    for i in range(0, len(metinler), batch_size):
-        batch_metinler = metinler[i:i+batch_size]
+    for i in range(0, len(veriler), batch_size):
+        batch_veriler = veriler[i:i+batch_size]
+        batch_metinler = [v["metin"] for v in batch_veriler]
         
         # Embedding oluştur
         embeddings = model.encode(batch_metinler)
         
         try:
-            for j, (metin, embedding) in enumerate(zip(batch_metinler, embeddings)):
-                # Embedding'i string formatına çevir: [val1, val2, ...]
-                embedding_str = '[' + ','.join(map(str, embedding.tolist())) + ']'
+            for j, (veri, embedding) in enumerate(zip(batch_veriler, embeddings)):
+                embedding_str = '[' + ','.join(f'{x:.8f}' for x in embedding.tolist()) + ']'
                 
                 cursor.execute("""
-                    INSERT INTO documents (chunk_id, kaynak, metin, embedding)
-                    VALUES (%s, %s, %s, %s::vector)
-                """, (i + j, "metin_dosyasi.txt", metin, embedding_str))
+                    INSERT INTO documents (chunk_id, doc_id, filename, filepath, metin, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s::vector)
+                """, (
+                    veri["chunk_id"], 
+                    veri["doc_id"], 
+                    veri["filename"], 
+                    veri["filepath"], 
+                    veri["metin"], 
+                    embedding_str
+                ))
             
             conn.commit()
-            total_inserted += len(batch_metinler)
-            print(f"✓ {total_inserted}/{len(metinler)} kayıt eklendi...")
+            total_inserted += len(batch_veriler)
+            print(f"✓ {total_inserted}/{len(veriler)} kayıt eklendi...")
         except Exception as e:
             print(f"✗ Veri ekleme hatası: {e}")
             conn.rollback()
@@ -112,20 +127,32 @@ def main():
     documents = data.get("documents", [])
     print(f"✓ Toplam {len(documents)} adet döküman bulundu")
     
-    # Tüm metinleri topla
-    tum_metinler = []
+    # Tüm parçaları topla
+    tum_veriler = []
+    
     for doc in documents:
+        doc_id = doc.get("id", 0)
+        filename = doc.get("filename", "")
+        filepath = doc.get("filepath", "")
         full_text = doc.get("full_text", "")
-        if full_text and len(full_text.strip()) > 50:
-            tum_metinler.append(full_text)
+        
+        if not full_text or len(full_text.strip()) < 50:
+            print(f"⚠ Atlanan döküman (boş veya çok kısa): {filename}")
+            continue
+        
+        # Metni parçala
+        parcalar = metni_parcala(full_text, chunk_size=300, overlap=50)
+        
+        for chunk_idx, parca in enumerate(parcalar):
+            tum_veriler.append({
+                "metin": parca,
+                "chunk_id": chunk_idx,
+                "doc_id": doc_id,
+                "filename": filename,
+                "filepath": filepath
+            })
     
-    # Metinleri parçala
-    metinler = []
-    for metin in tum_metinler:
-        parcalar = metni_parcala(metin, chunk_size=300, overlap=50)
-        metinler.extend(parcalar)
-    
-    print(f"✓ Toplam {len(metinler)} adet metin parçası oluşturuldu\n")
+    print(f"✓ Toplam {len(tum_veriler)} adet metin parçası oluşturuldu\n")
     
     # Veritabanına bağlan
     conn = connect_db()
@@ -139,9 +166,24 @@ def main():
         # Veri ekle
         print("📝 Veri ekleniyor...\n")
         start_time = time.time()
-        insert_documents(conn, metinler)
+        insert_documents(conn, tum_veriler)
         insert_time = time.time() - start_time
-        print(f"✓ Toplam veri ekleme zamanı: {insert_time:.2f}s")
+        
+        print(f"\n{'='*60}")
+        print(f"✓ {len(tum_veriler)} adet veri başarıyla pgvector'e kaydedildi!")
+        print(f"✓ Toplam ekleme zamanı: {insert_time:.2f}s")
+        print(f"{'='*60}")
+        
+        # Kayıt sayısını kontrol et
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM documents;")
+        count = cursor.fetchone()[0]
+        cursor.close()
+        
+        print(f"\n📊 Tablo Bilgisi:")
+        print(f"   Tablo adı: documents")
+        print(f"   Toplam kayıt: {count}")
+        print(f"✓ İşlem tamamlandı")
             
     finally:
         conn.close()
