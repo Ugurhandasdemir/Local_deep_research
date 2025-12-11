@@ -40,3 +40,7 @@ Thumbs.db
 
 DB/chorame/yerel_veritabani/
 DB/chorame/multi_index_chroma_db/
+
+# Ignore test UI folder (both latin 'i' and turkish dotless 'ı' variants)
+test_ui/
+test_uı/
