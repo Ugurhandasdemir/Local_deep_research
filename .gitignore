@@ -15,6 +15,9 @@ env/
 
 # VS Code ayarları (Kişisel ayarlar içeriyorsa)
 .vscode/
+DB/
+benchmark_grafikleri/
+models/
 
 # İşletim sistemi dosyaları
 .DS_Store

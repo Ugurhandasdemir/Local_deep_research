@@ -1,0 +1,274 @@
+{
+  "write_benchmark": {
+    "milvus": {
+      "database": "milvus",
+      "status": "success",
+      "write_time": 0.5526373386383057,
+      "record_count": 20,
+      "records_per_second": 36.190099006483806,
+      "model": "all-MiniLM-L6-v2"
+    },
+    "qdrant": {
+      "database": "qdrant",
+      "status": "success",
+      "write_time": 0.4766354560852051,
+      "record_count": 20,
+      "records_per_second": 41.960789413922086
+    },
+    "chromadb": {
+      "database": "chromadb",
+      "status": "success",
+      "write_time": 0.058405399322509766,
+      "record_count": 20,
+      "records_per_second": 342.4340939706903
+    },
+    "lancedb": {
+      "database": "lancedb",
+      "status": "success",
+      "write_time": 0.07416272163391113,
+      "record_count": 20,
+      "records_per_second": 269.6772658738961
+    },
+    "weaviate": {
+      "database": "weaviate",
+      "status": "success",
+      "write_time": 1.201711654663086,
+      "record_count": 20,
+      "records_per_second": 16.6429275462151
+    }
+  },
+  "search_benchmark": {
+    "milvus": {
+      "algorithms": {
+        "HNSW": {
+          "performance": {
+            "avg_time": 0.0053961753845214845,
+            "min_time": 0.0050661563873291016,
+            "max_time": 0.005745887756347656,
+            "std_time": 0.00027001976787656364,
+            "p50_time": 0.0053558349609375,
+            "p95_time": 0.005729293823242188,
+            "p99_time": 0.005742568969726563
+          },
+          "qps": 1853.1643779933902
+        }
+      }
+    },
+    "qdrant": {
+      "algorithms": {
+        "HNSW": {
+          "performance": {
+            "avg_time": 0.017044782638549805,
+            "min_time": 0.016108036041259766,
+            "max_time": 0.017476558685302734,
+            "std_time": 0.0004852075944838788,
+            "p50_time": 0.01724553108215332,
+            "p95_time": 0.01744370460510254,
+            "p99_time": 0.017469987869262696
+          },
+          "qps": 586.6897931208124
+        },
+        "EXACT": {
+          "performance": {
+            "avg_time": 0.01635150909423828,
+            "min_time": 0.01588916778564453,
+            "max_time": 0.016881704330444336,
+            "std_time": 0.0003207633412358821,
+            "p50_time": 0.01636815071105957,
+            "p95_time": 0.01678495407104492,
+            "p99_time": 0.016862354278564452
+          },
+          "qps": 611.5643481202394
+        }
+      }
+    },
+    "chromadb": {
+      "algorithms": {
+        "HNSW_VECTOR": {
+          "performance": {
+            "avg_time": 0.007279157638549805,
+            "min_time": 0.00704193115234375,
+            "max_time": 0.0075566768646240234,
+            "std_time": 0.0002001124839792034,
+            "p50_time": 0.007349491119384766,
+            "p95_time": 0.007523536682128906,
+            "p99_time": 0.007550048828125
+          },
+          "qps": 1373.7853329402901
+        }
+      }
+    },
+    "lancedb": {
+      "algorithms": {
+        "VECTOR_SEARCH": {
+          "performance": {
+            "avg_time": 0.016989946365356445,
+            "min_time": 0.016466617584228516,
+            "max_time": 0.01740717887878418,
+            "std_time": 0.00030420652337655245,
+            "p50_time": 0.016989469528198242,
+            "p95_time": 0.01734786033630371,
+            "p99_time": 0.017395315170288087
+          },
+          "qps": 588.5833766015071
+        }
+      }
+    },
+    "weaviate": {
+      "algorithms": {
+        "HNSW_NEAR_VECTOR": {
+          "performance": {
+            "avg_time": 0.007147455215454101,
+            "min_time": 0.006917238235473633,
+            "max_time": 0.0074732303619384766,
+            "std_time": 0.00020475576352802516,
+            "p50_time": 0.007204294204711914,
+            "p95_time": 0.0074195384979248045,
+            "p99_time": 0.007462491989135742
+          },
+          "qps": 1399.099357541713
+        },
+        "BM25": {
+          "performance": {
+            "avg_time": 0.00915980339050293,
+            "min_time": 0.006972789764404297,
+            "max_time": 0.012416839599609375,
+            "std_time": 0.002157577148238275,
+            "p50_time": 0.007973432540893555,
+            "p95_time": 0.01213679313659668,
+            "p99_time": 0.012360830307006836
+          },
+          "qps": 1091.7264894973841
+        }
+      }
+    }
+  },
+  "model_benchmark": {
+    "sentence_transformer": {
+      "model": "all-MiniLM-L6-v2",
+      "status": "success",
+      "embedding_benchmark": {
+        "texts_count": 5,
+        "avg_time": 0.004492839177449544,
+        "texts_per_second": 1112.8820335025562
+      },
+      "memory_mb": 2305.83203125,
+      "model_info": {
+        "vector_dim": 384,
+        "model_type": "SentenceTransformer"
+      }
+    },
+    "deberta": {
+      "model": "DeBERTa-v3-QA",
+      "status": "success",
+      "embedding_benchmark": {
+        "texts_count": 5,
+        "avg_time": 0.24159749348958334,
+        "texts_per_second": 20.69557894736842
+      },
+      "memory_mb": 2662.83203125,
+      "model_info": {
+        "vector_dim": 768,
+        "model_type": "QuestionAnswering",
+        "parameters": 183.83309
+      }
+    },
+    "electra": {
+      "model": "ELECTRA-QA",
+      "status": "success",
+      "embedding_benchmark": {
+        "texts_count": 5,
+        "avg_time": 0.3062732219696045,
+        "texts_per_second": 16.32529271689386
+      },
+      "memory_mb": 2984.08203125,
+      "model_info": {
+        "vector_dim": 768,
+        "model_type": "QuestionAnswering",
+        "parameters": 108.893186
+      }
+    },
+    "qa_model": {
+      "model": "QA-Model",
+      "status": "success",
+      "embedding_benchmark": {
+        "texts_count": 5,
+        "avg_time": 0.14486281077067056,
+        "texts_per_second": 34.51541478037038
+      },
+      "memory_mb": 3146.08203125,
+      "model_info": {
+        "vector_dim": 768,
+        "model_type": "QuestionAnswering",
+        "parameters": 66.364418
+      }
+    },
+    "xlm_roberta": {
+      "model": "XLM-RoBERTa-QA",
+      "status": "success",
+      "embedding_benchmark": {
+        "texts_count": 5,
+        "avg_time": 0.309373140335083,
+        "texts_per_second": 16.16171331029088
+      },
+      "memory_mb": 3467.58203125,
+      "model_info": {
+        "vector_dim": 768,
+        "model_type": "QuestionAnswering",
+        "parameters": 277.454594
+      }
+    }
+  },
+  "metadata": {
+    "date": "2026-01-01 14:23:48",
+    "vector_dim": 384,
+    "query_count": 10,
+    "models": {
+      "embedding_model": {
+        "name": "all-MiniLM-L6-v2",
+        "type": "SentenceTransformer",
+        "vector_dim": 384,
+        "description": "Hafif embedding modeli - semantik benzerlik için",
+        "status": "loaded"
+      },
+      "deberta_qa_model": {
+        "name": "deberta_v3_qa_model",
+        "type": "DeBERTa-v3-QA",
+        "path": "/home/ugo/Documents/Python/bitirememe projesi/models/deberta_v3_qa_model",
+        "description": "DeBERTa v3 tabanlı Soru-Cevap modeli",
+        "model_type": "QuestionAnswering",
+        "vector_dim": 768,
+        "status": "loaded_local"
+      },
+      "electra_qa_model": {
+        "name": "electra_english_qa_model",
+        "type": "ELECTRA-QA",
+        "path": "/home/ugo/Documents/Python/bitirememe projesi/models/electra_english_qa_model",
+        "description": "ELECTRA tabanlı İngilizce Soru-Cevap modeli",
+        "model_type": "QuestionAnswering",
+        "vector_dim": 768,
+        "status": "loaded_local"
+      },
+      "qa_model": {
+        "name": "qa_model",
+        "type": "QA-Model",
+        "path": "/home/ugo/Documents/Python/bitirememe projesi/models/qa_model",
+        "description": "Genel Soru-Cevap modeli",
+        "model_type": "QuestionAnswering",
+        "vector_dim": 768,
+        "status": "loaded_local"
+      },
+      "xlm_roberta_qa_model": {
+        "name": "xlm_roberta_qa_model",
+        "type": "XLM-RoBERTa-QA",
+        "path": "/home/ugo/Documents/Python/bitirememe projesi/models/xlm_roberta_qa_model",
+        "description": "XLM-RoBERTa tabanlı çok dilli Soru-Cevap modeli",
+        "model_type": "QuestionAnswering",
+        "vector_dim": 768,
+        "status": "loaded_local"
+      }
+    },
+    "document_count": 20,
+    "embedding_time": 0.017357587814331055
+  }
+}

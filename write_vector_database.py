@@ -25,11 +25,7 @@ from weaviate.classes.config import Property, DataType, Configure
 
 
 class VectorDatabaseBenchmark:
-    """
-    Models klasöründeki verileri okuyup tüm veritabanlarına yazan
-    ve benchmark testleri yapan kapsamlı sınıf.
-    """
-    
+  
     def __init__(self, models_path: str = None, db_base_path: str = None):
         self.base_path = "/home/ugo/Documents/Python/bitirememe projesi"
         self.models_path = models_path or os.path.join(self.base_path, "models")
@@ -70,8 +66,7 @@ class VectorDatabaseBenchmark:
         }
         
         # Modelleri yükle
-        print("="*70)
-        print("📊 MODELLER YÜKLENİYOR")
+        print(" MODELLER YÜKLENIYOR")
         print("="*70)
         
         # Model storage
@@ -82,13 +77,13 @@ class VectorDatabaseBenchmark:
         self.all_query_vectors = {}  # Her model için ayrı sorgu vektörleri
         
         # 1. SentenceTransformer
-        print(f"\n🔹 Embedding Modeli: all-MiniLM-L6-v2")
+        print(f"\n SentenceTransformer: all-MiniLM-L6-v2")
         self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
         self.vector_dim = 384
         self.models['sentence_transformer'] = self.embedding_model
         self.vector_dims['sentence_transformer'] = 384
         self.model_info['embedding_model']['status'] = 'loaded'
-        print("   ✓ Yüklendi (dim: 384)")
+        print("   Loaded (dim: 384)")
         
         # 2-5. Diğer modeller
         for model_key in ['deberta_qa_model', 'electra_qa_model', 'qa_model', 'xlm_roberta_qa_model']:
@@ -124,7 +119,6 @@ class VectorDatabaseBenchmark:
         self.documents = []
     
     def _load_model(self, model_key: str):
-        """Model yükle ve sakla"""
         fallback_models = {
             'deberta_qa_model': 'microsoft/deberta-v3-base',
             'electra_qa_model': 'google/electra-base-discriminator',
@@ -136,12 +130,12 @@ class VectorDatabaseBenchmark:
         model_name = self.model_info[model_key]['name']
         fallback = fallback_models.get(model_key, 'bert-base-uncased')
         
-        print(f"\n🔹 Model: {model_name}")
+        print(f"\n Model: {model_name}")
         print(f"   Yol: {model_path}")
         
         try:
             if os.path.exists(model_path) and os.path.exists(os.path.join(model_path, "model.safetensors")):
-                print(f"   📂 Model dosyası bulundu")
+                print(f"  Model dosyasi bulundu")
                 
                 try:
                     tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -165,12 +159,12 @@ class VectorDatabaseBenchmark:
                 self.vector_dims[model_key] = vector_dim
                 self.model_info[model_key]['vector_dim'] = vector_dim
                 self.model_info[model_key]['status'] = 'loaded'
-                print(f"   ✓ Yüklendi (dim: {vector_dim})")
+                print(f"   Loaded (dim: {vector_dim})")
             else:
-                print(f"   ⚠ Model bulunamadı")
+                print(f"   Model bulunamadi")
                 self.model_info[model_key]['status'] = 'not_found'
         except Exception as e:
-            print(f"   ❌ Hata: {e}")
+            print(f"    Hata: {e}")
             self.model_info[model_key]['status'] = 'error'
     
     def _get_model_embeddings(self, model_key: str, texts: List[str]) -> List[List[float]]:
@@ -223,15 +217,14 @@ class VectorDatabaseBenchmark:
     
     def prepare_all_embeddings(self):
         """Tüm modeller için embedding'leri hazırla"""
-        print("\n" + "="*70)
-        print("📊 TÜM MODELLER İÇİN EMBEDDİNG'LER HAZIRLANIYOR")
+        print(" TUM MODELLER ICIN EMBEDDING'LER HAZIRLANIYOR")
         print("="*70)
         
         texts = [doc["text"] for doc in self.documents]
         
         for model_key in ['sentence_transformer', 'deberta_qa_model', 'electra_qa_model', 'qa_model', 'xlm_roberta_qa_model']:
             if model_key == 'sentence_transformer' or self.models.get(model_key) is not None:
-                print(f"\n📊 {model_key} embedding'leri hesaplanıyor...")
+                print(f"\n {model_key} embedding'leri hesaplanıyor...")
                 start_time = time.time()
                 
                 if model_key == 'sentence_transformer':
@@ -246,22 +239,22 @@ class VectorDatabaseBenchmark:
                         batch_emb = self._get_model_embeddings(model_key, batch)
                         if batch_emb:
                             embeddings.extend(batch_emb)
-                        print(f"   {min(i+batch_size, len(texts))}/{len(texts)} işlendi...")
+                        print(f"   {min(i+batch_size, len(texts))}/{len(texts)} islendi...")
                     
                     if embeddings:
                         self.all_embeddings[model_key] = embeddings
                         self.all_query_vectors[model_key] = self._get_model_embeddings(model_key, self.test_queries)
                 
                 elapsed = time.time() - start_time
-                print(f"   ✓ {model_key}: {elapsed:.2f}s ({len(texts)} doküman)")
+                print(f"   : {model_key}: {elapsed:.2f}s ({len(texts)} dokuman)")
             else:
-                print(f"\n⚠ {model_key} yüklenmediği için atlanıyor")
+                print(f"\n Model {model_key} yuklenmedigi icin atlanıyor")
     
     # ==================== MULTI-MODEL DATABASE WRITE ====================
     def write_all_models_to_milvus(self):
         """Tüm modeller için Milvus'a yaz"""
         print("\n" + "="*70)
-        print("🔷 TÜM MODELLER İÇİN MILVUS'A YAZILIYOR")
+        print(" TUM MODELLER ICIN MILVUS'A YAZILIYOR")
         print("="*70)
         
         results = {}
@@ -275,7 +268,7 @@ class VectorDatabaseBenchmark:
             db_path = os.path.join(self.db_base_path, f"milvus/{model_key}_db.db")
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
             
-            print(f"\n📝 {model_key} (dim: {vector_dim})...")
+            print(f"\n {model_key} (dim: {vector_dim})...")
             
             try:
                 if os.path.exists(db_path):
@@ -299,11 +292,11 @@ class VectorDatabaseBenchmark:
                     "record_count": len(self.documents),
                     "vector_dim": vector_dim
                 }
-                print(f"   ✓ {write_time:.2f}s ({len(self.documents)} kayıt)")
+                print(f"   : {write_time:.2f}s ({len(self.documents)} kayit)")
                 
             except Exception as e:
                 results[model_key] = {"status": "error", "error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["milvus_write"] = results
         return results
@@ -311,7 +304,7 @@ class VectorDatabaseBenchmark:
     def write_all_models_to_qdrant(self):
         """Tüm modeller için Qdrant'a yaz"""
         print("\n" + "="*70)
-        print("🔷 TÜM MODELLER İÇİN QDRANT'A YAZILIYOR")
+        print(" TUM MODELLER ICIN QDRANT'A YAZILIYOR")
         print("="*70)
         
         results = {}
@@ -319,7 +312,7 @@ class VectorDatabaseBenchmark:
         try:
             client = QdrantClient(host="localhost", port=6333, timeout=120)
         except Exception as e:
-            print(f"❌ Qdrant bağlantı hatası: {e}")
+            print(f" Qdrant baglanti hatasi: {e}")
             return {"error": str(e)}
         
         for model_key, embeddings in self.all_embeddings.items():
@@ -329,7 +322,7 @@ class VectorDatabaseBenchmark:
             vector_dim = len(embeddings[0])
             collection_name = f"docs_{model_key}"
             
-            print(f"\n📝 {model_key} (dim: {vector_dim})...")
+            print(f"\n {model_key} (dim: {vector_dim})...")
             
             try:
                 try:
@@ -348,11 +341,11 @@ class VectorDatabaseBenchmark:
                 
                 write_time = time.time() - start_time
                 results[model_key] = {"status": "success", "write_time": write_time, "record_count": len(self.documents), "vector_dim": vector_dim}
-                print(f"   ✓ {write_time:.2f}s")
+                print(f"   : {write_time:.2f}s")
                 
             except Exception as e:
                 results[model_key] = {"status": "error", "error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["qdrant_write"] = results
         return results
@@ -360,7 +353,7 @@ class VectorDatabaseBenchmark:
     def write_all_models_to_chromadb(self):
         """Tüm modeller için ChromaDB'ye yaz"""
         print("\n" + "="*70)
-        print("🔷 TÜM MODELLER İÇİN CHROMADB'YE YAZILIYOR")
+        print(" TUM MODELLER ICIN CHROMADB'YE YAZILIYOR")
         print("="*70)
         
         results = {}
@@ -374,7 +367,7 @@ class VectorDatabaseBenchmark:
             collection_name = f"docs_{model_key}"
             db_path = os.path.join(self.db_base_path, f"chromadb/{model_key}_db")
             
-            print(f"\n📝 {model_key} (dim: {vector_dim})...")
+            print(f"\n {model_key} (dim: {vector_dim})...")
             
             try:
                 if os.path.exists(db_path):
@@ -396,11 +389,11 @@ class VectorDatabaseBenchmark:
                 
                 write_time = time.time() - start_time
                 results[model_key] = {"status": "success", "write_time": write_time, "record_count": len(self.documents), "vector_dim": vector_dim}
-                print(f"   ✓ {write_time:.2f}s")
+                print(f"   : {write_time:.2f}s")
                 
             except Exception as e:
                 results[model_key] = {"status": "error", "error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["chromadb_write"] = results
         return results
@@ -408,7 +401,7 @@ class VectorDatabaseBenchmark:
     def write_all_models_to_lancedb(self):
         """Tüm modeller için LanceDB'ye yaz"""
         print("\n" + "="*70)
-        print("🔷 TÜM MODELLER İÇİN LANCEDB'YE YAZILIYOR")
+        print(" TUM MODELLER ICIN LANCEDB'YE YAZILIYOR")
         print("="*70)
         
         results = {}
@@ -422,7 +415,7 @@ class VectorDatabaseBenchmark:
             table_name = f"docs_{model_key}"
             db_path = os.path.join(self.db_base_path, f"lancedb/{model_key}_db")
             
-            print(f"\n📝 {model_key} (dim: {vector_dim})...")
+            print(f"\n {model_key} (dim: {vector_dim})...")
             
             try:
                 if os.path.exists(db_path):
@@ -439,11 +432,11 @@ class VectorDatabaseBenchmark:
                 
                 write_time = time.time() - start_time
                 results[model_key] = {"status": "success", "write_time": write_time, "record_count": len(self.documents), "vector_dim": vector_dim}
-                print(f"   ✓ {write_time:.2f}s")
+                print(f"   : {write_time:.2f}s")
                 
             except Exception as e:
                 results[model_key] = {"status": "error", "error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["lancedb_write"] = results
         return results
@@ -451,7 +444,7 @@ class VectorDatabaseBenchmark:
     def write_all_models_to_weaviate(self):
         """Tüm modeller için Weaviate'a yaz"""
         print("\n" + "="*70)
-        print("🔷 TÜM MODELLER İÇİN WEAVIATE'A YAZILIYOR")
+        print(" TUM MODELLER ICIN WEAVIATE'A YAZILIYOR")
         print("="*70)
         
         results = {}
@@ -459,7 +452,7 @@ class VectorDatabaseBenchmark:
         try:
             client = weaviate.connect_to_local()
         except Exception as e:
-            print(f"❌ Weaviate bağlantı hatası: {e}")
+            print(f" Weaviate baglanti hatasi: {e}")
             return {"error": str(e)}
         
         for model_key, embeddings in self.all_embeddings.items():
@@ -470,7 +463,7 @@ class VectorDatabaseBenchmark:
             # Weaviate collection name format
             collection_name = f"Docs{model_key.replace('_', '').title()}"
             
-            print(f"\n📝 {model_key} (dim: {vector_dim})...")
+            print(f"\n {model_key} (dim: {vector_dim})...")
             
             try:
                 try:
@@ -495,11 +488,11 @@ class VectorDatabaseBenchmark:
                 
                 write_time = time.time() - start_time
                 results[model_key] = {"status": "success", "write_time": write_time, "record_count": len(self.documents), "vector_dim": vector_dim}
-                print(f"   ✓ {write_time:.2f}s")
+                print(f"   : {write_time:.2f}s")
                 
             except Exception as e:
                 results[model_key] = {"status": "error", "error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["weaviate_write"] = results
         return results
@@ -508,7 +501,7 @@ class VectorDatabaseBenchmark:
     def benchmark_all_models_milvus_search(self):
         """Tüm modeller için Milvus arama benchmark - Çoklu algoritma"""
         print("\n" + "="*70)
-        print("🔍 TÜM MODELLER İÇİN MILVUS ARAMA BENCHMARK")
+        print(" TUM MODELLER ICIN MILVUS ARAMA BENCHMARK")
         print("="*70)
         
         results = {}
@@ -520,7 +513,7 @@ class VectorDatabaseBenchmark:
             collection_name = f"docs_{model_key}"
             db_path = os.path.join(self.db_base_path, f"milvus/{model_key}_db.db")
             
-            print(f"\n📊 {model_key}...")
+            print(f"\n {model_key}...")
             
             try:
                 client = MilvusClient(db_path)
@@ -533,7 +526,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(hnsw_search)
                 if "error" not in perf:
                     model_results["HNSW_default"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_default: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_default: {perf['avg_time']*1000:.2f}ms")
                 
                 # 2. Farklı limit değerleri
                 for limit in [5, 20, 50, 100]:
@@ -543,7 +536,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(limit_search)
                     if "error" not in perf:
                         model_results[f"HNSW_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 3. Batch search (tüm sorguları tek seferde)
                 def batch_search():
@@ -552,7 +545,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(batch_search)
                 if "error" not in perf:
                     model_results["HNSW_batch"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_batch: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_batch: {perf['avg_time']*1000:.2f}ms")
                 
                 # 4. Farklı nprobe değerleri (search params)
                 for nprobe in [1, 8, 16, 32]:
@@ -568,13 +561,13 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(nprobe_search)
                     if "error" not in perf:
                         model_results[f"HNSW_nprobe{nprobe}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ HNSW_nprobe{nprobe}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : HNSW_nprobe{nprobe}: {perf['avg_time']*1000:.2f}ms")
                 
                 results[model_key] = model_results
                     
             except Exception as e:
                 results[model_key] = {"error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["milvus_search"] = results
         return results
@@ -582,7 +575,7 @@ class VectorDatabaseBenchmark:
     def benchmark_all_models_qdrant_search(self):
         """Tüm modeller için Qdrant arama benchmark - Çoklu algoritma"""
         print("\n" + "="*70)
-        print("🔍 TÜM MODELLER İÇİN QDRANT ARAMA BENCHMARK")
+        print(" TUM MODELLER ICIN QDRANT ARAMA BENCHMARK")
         print("="*70)
         
         results = {}
@@ -590,7 +583,7 @@ class VectorDatabaseBenchmark:
         try:
             client = QdrantClient(host="localhost", port=6333, timeout=60)
         except Exception as e:
-            print(f"❌ Qdrant bağlantı hatası: {e}")
+            print(f" Qdrant baglanti hatasi: {e}")
             return {"error": str(e)}
         
         for model_key, query_vectors in self.all_query_vectors.items():
@@ -598,7 +591,7 @@ class VectorDatabaseBenchmark:
                 continue
             
             collection_name = f"docs_{model_key}"
-            print(f"\n📊 {model_key}...")
+            print(f"\n {model_key}...")
             
             try:
                 model_results = {}
@@ -610,7 +603,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(hnsw_search)
                 if "error" not in perf:
                     model_results["HNSW_default"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_default: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_default: {perf['avg_time']*1000:.2f}ms")
                 
                 # 2. Exact Search (brute force)
                 def exact_search():
@@ -619,7 +612,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(exact_search)
                 if "error" not in perf:
                     model_results["EXACT_bruteforce"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ EXACT_bruteforce: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : EXACT_bruteforce: {perf['avg_time']*1000:.2f}ms")
                 
                 # 3. HNSW with different ef values
                 for ef in [8, 16, 32, 64, 128, 256]:
@@ -629,7 +622,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(ef_search)
                     if "error" not in perf:
                         model_results[f"HNSW_ef{ef}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ HNSW_ef{ef}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : HNSW_ef{ef}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 4. Farklı limit değerleri
                 for limit in [5, 20, 50, 100]:
@@ -639,7 +632,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(limit_search)
                     if "error" not in perf:
                         model_results[f"HNSW_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 5. Quantization enabled search (if available)
                 try:
@@ -655,7 +648,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(quantized_search)
                     if "error" not in perf:
                         model_results["HNSW_quantized"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ HNSW_quantized: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : HNSW_quantized: {perf['avg_time']*1000:.2f}ms")
                 except:
                     pass
                 
@@ -666,13 +659,13 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(no_payload_search)
                 if "error" not in perf:
                     model_results["HNSW_no_payload"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_no_payload: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_no_payload: {perf['avg_time']*1000:.2f}ms")
                 
                 results[model_key] = model_results
                 
             except Exception as e:
                 results[model_key] = {"error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["qdrant_search"] = results
         return results
@@ -680,7 +673,7 @@ class VectorDatabaseBenchmark:
     def benchmark_all_models_chromadb_search(self):
         """Tüm modeller için ChromaDB arama benchmark - Çoklu algoritma"""
         print("\n" + "="*70)
-        print("🔍 TÜM MODELLER İÇİN CHROMADB ARAMA BENCHMARK")
+        print(" TUM MODELLER ICIN CHROMADB ARAMA BENCHMARK")
         print("="*70)
         
         results = {}
@@ -692,7 +685,7 @@ class VectorDatabaseBenchmark:
             collection_name = f"docs_{model_key}"
             db_path = os.path.join(self.db_base_path, f"chromadb/{model_key}_db")
             
-            print(f"\n📊 {model_key}...")
+            print(f"\n {model_key}...")
             
             try:
                 client = chromadb.PersistentClient(path=db_path)
@@ -707,7 +700,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(vector_search)
                 if "error" not in perf:
                     model_results["HNSW_vector"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_vector: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_vector: {perf['avg_time']*1000:.2f}ms")
                 
                 # 2. Farklı n_results değerleri
                 for n in [5, 20, 50, 100]:
@@ -717,7 +710,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(n_search)
                     if "error" not in perf:
                         model_results[f"HNSW_n{n}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ HNSW_n{n}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : HNSW_n{n}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 3. Text query search (eğer embedding_function varsa)
                 def text_search():
@@ -727,7 +720,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(text_search)
                     if "error" not in perf:
                         model_results["TEXT_search"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ TEXT_search: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : TEXT_search: {perf['avg_time']*1000:.2f}ms")
                 except:
                     pass
                 
@@ -738,7 +731,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(minimal_search)
                 if "error" not in perf:
                     model_results["HNSW_minimal"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_minimal: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_minimal: {perf['avg_time']*1000:.2f}ms")
                 
                 def full_search():
                     return [collection.query(query_embeddings=[qv], n_results=10, include=["documents", "metadatas", "distances", "embeddings"]) for qv in query_vectors]
@@ -746,7 +739,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(full_search)
                 if "error" not in perf:
                     model_results["HNSW_full"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_full: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_full: {perf['avg_time']*1000:.2f}ms")
                 
                 # 5. Batch query
                 def batch_search():
@@ -755,13 +748,13 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(batch_search)
                 if "error" not in perf:
                     model_results["HNSW_batch"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_batch: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_batch: {perf['avg_time']*1000:.2f}ms")
                 
                 results[model_key] = model_results
                 
             except Exception as e:
                 results[model_key] = {"error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["chromadb_search"] = results
         return results
@@ -769,7 +762,7 @@ class VectorDatabaseBenchmark:
     def benchmark_all_models_lancedb_search(self):
         """Tüm modeller için LanceDB arama benchmark - Çoklu algoritma"""
         print("\n" + "="*70)
-        print("🔍 TÜM MODELLER İÇİN LANCEDB ARAMA BENCHMARK")
+        print(" TUM MODELLER ICIN LANCEDB ARAMA BENCHMARK")
         print("="*70)
         
         results = {}
@@ -781,7 +774,7 @@ class VectorDatabaseBenchmark:
             table_name = f"docs_{model_key}"
             db_path = os.path.join(self.db_base_path, f"lancedb/{model_key}_db")
             
-            print(f"\n📊 {model_key}...")
+            print(f"\n {model_key}...")
             
             try:
                 db = lancedb.connect(db_path)
@@ -796,7 +789,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(vector_search)
                 if "error" not in perf:
                     model_results["VECTOR_default"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ VECTOR_default: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : VECTOR_default: {perf['avg_time']*1000:.2f}ms")
                 
                 # 2. Farklı limit değerleri
                 for limit in [5, 20, 50, 100, 200]:
@@ -806,7 +799,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(limit_search)
                     if "error" not in perf:
                         model_results[f"VECTOR_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ VECTOR_limit{limit}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : VECTOR_limit{limit}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 3. Select specific columns
                 def select_search():
@@ -815,7 +808,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(select_search)
                 if "error" not in perf:
                     model_results["VECTOR_select_text"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ VECTOR_select_text: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : VECTOR_select_text: {perf['avg_time']*1000:.2f}ms")
                 
                 # 4. Cosine metric (default)
                 def cosine_search():
@@ -824,7 +817,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(cosine_search)
                 if "error" not in perf:
                     model_results["VECTOR_cosine"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ VECTOR_cosine: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : VECTOR_cosine: {perf['avg_time']*1000:.2f}ms")
                 
                 # 5. L2 (Euclidean) metric
                 def l2_search():
@@ -833,7 +826,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(l2_search)
                 if "error" not in perf:
                     model_results["VECTOR_L2"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ VECTOR_L2: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : VECTOR_L2: {perf['avg_time']*1000:.2f}ms")
                 
                 # 6. Dot product metric
                 def dot_search():
@@ -842,7 +835,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(dot_search)
                 if "error" not in perf:
                     model_results["VECTOR_dot"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ VECTOR_dot: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : VECTOR_dot: {perf['avg_time']*1000:.2f}ms")
                 
                 # 7. nprobes değerleri (IVF için)
                 for nprobes in [1, 8, 20, 50]:
@@ -853,7 +846,7 @@ class VectorDatabaseBenchmark:
                         perf = self._measure_search_time(nprobes_search)
                         if "error" not in perf:
                             model_results[f"VECTOR_nprobes{nprobes}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                            print(f"   ✓ VECTOR_nprobes{nprobes}: {perf['avg_time']*1000:.2f}ms")
+                            print(f"   : VECTOR_nprobes{nprobes}: {perf['avg_time']*1000:.2f}ms")
                     except:
                         pass
                 
@@ -866,7 +859,7 @@ class VectorDatabaseBenchmark:
                         perf = self._measure_search_time(refine_search)
                         if "error" not in perf:
                             model_results[f"VECTOR_refine{refine}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                            print(f"   ✓ VECTOR_refine{refine}: {perf['avg_time']*1000:.2f}ms")
+                            print(f"   : VECTOR_refine{refine}: {perf['avg_time']*1000:.2f}ms")
                     except:
                         pass
                 
@@ -874,7 +867,7 @@ class VectorDatabaseBenchmark:
                 
             except Exception as e:
                 results[model_key] = {"error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["lancedb_search"] = results
         return results
@@ -882,7 +875,7 @@ class VectorDatabaseBenchmark:
     def benchmark_all_models_weaviate_search(self):
         """Tüm modeller için Weaviate arama benchmark - Çoklu algoritma"""
         print("\n" + "="*70)
-        print("🔍 TÜM MODELLER İÇİN WEAVIATE ARAMA BENCHMARK")
+        print(" TUM MODELLER ICIN WEAVIATE ARAMA BENCHMARK")
         print("="*70)
         
         results = {}
@@ -890,7 +883,7 @@ class VectorDatabaseBenchmark:
         try:
             client = weaviate.connect_to_local()
         except Exception as e:
-            print(f"❌ Weaviate bağlantı hatası: {e}")
+            print(f" Weaviate baglanti hatasi: {e}")
             return {"error": str(e)}
         
         for model_key, query_vectors in self.all_query_vectors.items():
@@ -898,7 +891,7 @@ class VectorDatabaseBenchmark:
                 continue
             
             collection_name = f"Docs{model_key.replace('_', '').title()}"
-            print(f"\n📊 {model_key}...")
+            print(f"\n {model_key}...")
             
             try:
                 collection = client.collections.get(collection_name)
@@ -911,7 +904,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(near_vector_search)
                 if "error" not in perf:
                     model_results["HNSW_near_vector"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ HNSW_near_vector: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : HNSW_near_vector: {perf['avg_time']*1000:.2f}ms")
                 
                 # 2. Farklı limit değerleri
                 for limit in [5, 20, 50, 100]:
@@ -921,7 +914,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(limit_search)
                     if "error" not in perf:
                         model_results[f"HNSW_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 3. BM25 Search (keyword-based)
                 def bm25_search():
@@ -930,7 +923,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(bm25_search)
                 if "error" not in perf:
                     model_results["BM25"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ BM25: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : BM25: {perf['avg_time']*1000:.2f}ms")
                 
                 # 4. Hybrid Search - farklı alpha değerleri
                 for alpha in [0.0, 0.25, 0.5, 0.75, 1.0]:
@@ -940,7 +933,7 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(hybrid_search)
                     if "error" not in perf:
                         model_results[f"HYBRID_alpha{alpha}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ HYBRID_alpha{alpha}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : HYBRID_alpha{alpha}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 5. Near vector with certainty threshold
                 for certainty in [0.5, 0.7, 0.9]:
@@ -951,7 +944,7 @@ class VectorDatabaseBenchmark:
                         perf = self._measure_search_time(certainty_search)
                         if "error" not in perf:
                             model_results[f"HNSW_certainty{certainty}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                            print(f"   ✓ HNSW_certainty{certainty}: {perf['avg_time']*1000:.2f}ms")
+                            print(f"   : HNSW_certainty{certainty}: {perf['avg_time']*1000:.2f}ms")
                     except:
                         pass
                 
@@ -964,7 +957,7 @@ class VectorDatabaseBenchmark:
                         perf = self._measure_search_time(distance_search)
                         if "error" not in perf:
                             model_results[f"HNSW_distance{distance}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                            print(f"   ✓ HNSW_distance{distance}: {perf['avg_time']*1000:.2f}ms")
+                            print(f"   : HNSW_distance{distance}: {perf['avg_time']*1000:.2f}ms")
                     except:
                         pass
                 
@@ -975,7 +968,7 @@ class VectorDatabaseBenchmark:
                 perf = self._measure_search_time(fetch_search)
                 if "error" not in perf:
                     model_results["FETCH_baseline"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   ✓ FETCH_baseline: {perf['avg_time']*1000:.2f}ms")
+                    print(f"   : FETCH_baseline: {perf['avg_time']*1000:.2f}ms")
                 
                 # 8. BM25 with different limits
                 for limit in [5, 20, 50]:
@@ -985,13 +978,13 @@ class VectorDatabaseBenchmark:
                     perf = self._measure_search_time(bm25_limit_search)
                     if "error" not in perf:
                         model_results[f"BM25_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   ✓ BM25_limit{limit}: {perf['avg_time']*1000:.2f}ms")
+                        print(f"   : BM25_limit{limit}: {perf['avg_time']*1000:.2f}ms")
                 
                 results[model_key] = model_results
                 
             except Exception as e:
                 results[model_key] = {"error": str(e)}
-                print(f"   ❌ Hata: {e}")
+                print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["weaviate_search"] = results
         return results
@@ -1027,11 +1020,11 @@ class VectorDatabaseBenchmark:
     def load_models_data(self) -> bool:
         """Models klasöründeki verileri yükle"""
         print("\n" + "="*70)
-        print("📂 VERİLER YÜKLENİYOR")
+        print(" VERILER YUKLENIYOR")
         print("="*70)
         
         if not os.path.exists(self.models_path):
-            print(f"❌ Models klasörü bulunamadı: {self.models_path}")
+            print(f" Models klasoru bulunamadi: {self.models_path}")
             return False
         
         json_files = glob.glob(os.path.join(self.models_path, "*.json"))
@@ -1071,7 +1064,7 @@ class VectorDatabaseBenchmark:
             documents = self._generate_sample_data()
         
         self.documents = documents
-        print(f"✅ Toplam {len(self.documents)} doküman yüklendi")
+        print(f" Toplam {len(self.documents)} dokuman yuklendi")
         return True
     
     def _generate_sample_data(self) -> List[Dict]:
@@ -1101,7 +1094,7 @@ class VectorDatabaseBenchmark:
         # JSON kaydet
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, indent=2, ensure_ascii=False, default=str)
-        print(f"\n💾 JSON: {json_file}")
+        print(f"\n JSON: {json_file}")
         
         # Excel oluştur
         wb = openpyxl.Workbook()
@@ -1117,23 +1110,23 @@ class VectorDatabaseBenchmark:
         
         # ==================== 1. GENEL ÖZET SAYFASI ====================
         ws_summary = wb.active
-        ws_summary.title = "Genel Özet"
+        ws_summary.title = "Genel Ozet"
         
         ws_summary.merge_cells('A1:F1')
-        ws_summary['A1'] = "BENCHMARK GENEL ÖZETİ"
+        ws_summary['A1'] = "BENCHMARK GENEL OZETI"
         ws_summary['A1'].font = Font(bold=True, size=16)
         ws_summary['A1'].alignment = center
         
         # Meta bilgiler
         ws_summary['A3'] = "Test Tarihi:"
         ws_summary['B3'] = self.results["metadata"]["date"]
-        ws_summary['A4'] = "Sorgu Sayısı:"
+        ws_summary['A4'] = "Sorgu Sayisi:"
         ws_summary['B4'] = self.results["metadata"]["query_count"]
-        ws_summary['A5'] = "Doküman Sayısı:"
+        ws_summary['A5'] = "Dokuman Sayisi:"
         ws_summary['B5'] = len(self.documents)
         
         # Yüklenen modeller
-        ws_summary['A7'] = "YÜKLENEN MODELLER:"
+        ws_summary['A7'] = "YUKLENEN MODELLER:"
         ws_summary['A7'].font = Font(bold=True)
         row = 8
         for model_key, model_data in self.model_info.items():
@@ -1150,7 +1143,7 @@ class VectorDatabaseBenchmark:
         # ==================== 2. YAZMA BENCHMARK SAYFASI ====================
         ws_write = wb.create_sheet("Yazma Benchmark")
         ws_write.merge_cells('A1:E1')
-        ws_write['A1'] = "TÜM MODELLER - YAZMA BENCHMARK SONUÇLARI"
+        ws_write['A1'] = "TUM MODELLER - YAZMA BENCHMARK SONUCLARI"
         ws_write['A1'].font = Font(bold=True, size=14)
         ws_write['A1'].alignment = center
         
@@ -1167,7 +1160,7 @@ class VectorDatabaseBenchmark:
             ws_write[f'A{row}'].fill = green_fill
             row += 1
             
-            headers = ["Model", "Süre (s)", "Kayıt Sayısı", "Vektör Dim", "Kayıt/sn"]
+            headers = ["Model", "Sure (s)", "Kayit Sayisi", "Vektor Dim", "Kayit/sn"]
             for col, h in enumerate(headers, 1):
                 cell = ws_write.cell(row=row, column=col, value=h)
                 cell.fill = header_fill
@@ -1192,9 +1185,9 @@ class VectorDatabaseBenchmark:
             ws_write.column_dimensions[col].width = 20
         
         # ==================== 3. TÜM ARAMA SONUÇLARI SAYFASI ====================
-        ws_all_search = wb.create_sheet("Tüm Arama Sonuçları")
+        ws_all_search = wb.create_sheet("Tum Arama Sonuclari")
         ws_all_search.merge_cells('A1:I1')
-        ws_all_search['A1'] = "TÜM ARAMA ALGORİTMALARI - DETAYLI SONUÇLAR"
+        ws_all_search['A1'] = "TUM ARAMA ALGORITMALARI - DETAYLI SONUCLAR"
         ws_all_search['A1'].font = Font(bold=True, size=14)
         ws_all_search['A1'].alignment = center
         
@@ -1228,7 +1221,7 @@ class VectorDatabaseBenchmark:
         
         all_results.sort(key=lambda x: x["avg_ms"])
         
-        headers = ["Sıra", "Veritabanı", "Model", "Algoritma", "Ort (ms)", "Min (ms)", "Max (ms)", "Std (ms)", "P95 (ms)", "QPS"]
+        headers = ["Sira", "Veritabani", "Model", "Algoritma", "Ort (ms)", "Min (ms)", "Max (ms)", "Std (ms)", "P95 (ms)", "QPS"]
         row = 3
         for col, h in enumerate(headers, 1):
             cell = ws_all_search.cell(row=row, column=col, value=h)
@@ -1272,13 +1265,13 @@ class VectorDatabaseBenchmark:
             ws_db = wb.create_sheet(f"{db_name.upper()} Arama")
             
             ws_db.merge_cells('A1:H1')
-            ws_db['A1'] = f"{db_name.upper()} - ARAMA ALGORİTMALARI DETAY"
+            ws_db['A1'] = f"{db_name.upper()} - ARAMA ALGORITMALARI DETAY"
             ws_db['A1'].font = Font(bold=True, size=14)
             ws_db['A1'].alignment = center
             
             db_data = self.results.get("multi_model_benchmark", {}).get(db, {})
             if not db_data:
-                ws_db['A3'] = "Veri bulunamadı"
+                ws_db['A3'] = "Veri bulunamadi"
                 continue
             
             row = 3
@@ -1325,9 +1318,9 @@ class VectorDatabaseBenchmark:
                 ws_db.column_dimensions[col].width = 12
         
         # ==================== 5. MODEL BAZINDA KARŞILAŞTIRMA ====================
-        ws_model = wb.create_sheet("Model Karşılaştırma")
+        ws_model = wb.create_sheet("Model Karsilastirma")
         ws_model.merge_cells('A1:G1')
-        ws_model['A1'] = "MODEL BAZINDA EN İYİ SONUÇLAR"
+        ws_model['A1'] = "MODEL BAZINDA EN IYI SONUCLAR"
         ws_model['A1'].font = Font(bold=True, size=14)
         ws_model['A1'].alignment = center
         
@@ -1338,7 +1331,7 @@ class VectorDatabaseBenchmark:
             if model not in model_best or r["avg_ms"] < model_best[model]["avg_ms"]:
                 model_best[model] = r
         
-        headers = ["Model", "En İyi DB", "En İyi Algoritma", "Süre (ms)", "QPS", "Toplam Test"]
+        headers = ["Model", "En Iyi DB", "En Iyi Algoritma", "Sure (ms)", "QPS", "Toplam Test"]
         row = 3
         for col, h in enumerate(headers, 1):
             cell = ws_model.cell(row=row, column=col, value=h)
@@ -1366,23 +1359,23 @@ class VectorDatabaseBenchmark:
         # ==================== 6. ALGORİTMA KATEGORİLERİ ====================
         ws_algo = wb.create_sheet("Algoritma Kategorileri")
         ws_algo.merge_cells('A1:F1')
-        ws_algo['A1'] = "ALGORİTMA KATEGORİLERİ PERFORMANS ANALİZİ"
+        ws_algo['A1'] = "ALGORITMA KATEGORILERI PERFORMANS ANALIZI"
         ws_algo['A1'].font = Font(bold=True, size=14)
         ws_algo['A1'].alignment = center
         
         categories = {
-            "HNSW Tabanlı": ["HNSW", "near_vector"],
-            "Batch İşlem": ["batch"],
-            "Limit Varyasyonları": ["limit"],
+            "HNSW Tabanli": ["HNSW", "near_vector"],
+            "Batch Islem": ["batch"],
+            "Limit Varyasyonlari": ["limit"],
             "BM25/Keyword": ["BM25", "TEXT"],
             "Hybrid": ["HYBRID"],
             "Exact/Brute Force": ["EXACT", "bruteforce"],
-            "Metric Varyasyonları": ["cosine", "L2", "dot"],
+            "Metric Varyasyonlari": ["cosine", "L2", "dot"],
             "Quantization": ["quantized"],
             "Parametre Testi": ["ef", "nprobe", "refine", "nprobes"]
         }
         
-        headers = ["Kategori", "Test Sayısı", "Ort Süre (ms)", "Min Süre (ms)", "En İyi Kombinasyon"]
+        headers = ["Kategori", "Test Sayisi", "Ort Sure (ms)", "Min Sure (ms)", "En Iyi Kombinasyon"]
         row = 3
         for col, h in enumerate(headers, 1):
             cell = ws_algo.cell(row=row, column=col, value=h)
@@ -1422,13 +1415,13 @@ class VectorDatabaseBenchmark:
         ws_algo.column_dimensions['E'].width = 50
         
         # ==================== 7. VERİTABANI KARŞILAŞTIRMA ====================
-        ws_db_compare = wb.create_sheet("Veritabanı Karşılaştırma")
+        ws_db_compare = wb.create_sheet("Veritabani Karsilastirma")
         ws_db_compare.merge_cells('A1:H1')
-        ws_db_compare['A1'] = "VERİTABANI PERFORMANS KARŞILAŞTIRMASI"
+        ws_db_compare['A1'] = "VERITABANI PERFORMANS KARSILASTIRMASI"
         ws_db_compare['A1'].font = Font(bold=True, size=14)
         ws_db_compare['A1'].alignment = center
         
-        headers = ["Veritabanı", "Toplam Test", "Ort Süre (ms)", "Min Süre (ms)", "Max Süre (ms)", "Ort QPS", "En İyi Algoritma"]
+        headers = ["Veritabani", "Toplam Test", "Ort Sure (ms)", "Min Sure (ms)", "Max Sure (ms)", "Ort QPS", "En Iyi Algoritma"]
         row = 3
         for col, h in enumerate(headers, 1):
             cell = ws_db_compare.cell(row=row, column=col, value=h)
@@ -1471,24 +1464,24 @@ class VectorDatabaseBenchmark:
         
         # Dosyayı kaydet
         wb.save(excel_file)
-        print(f"💾 Excel: {excel_file}")
-        print(f"   📄 Sayfalar:")
-        print(f"      - Genel Özet: Meta bilgiler ve yüklenen modeller")
-        print(f"      - Yazma Benchmark: Tüm yazma işlemleri")
-        print(f"      - Tüm Arama Sonuçları: {len(all_results)} arama testi")
-        print(f"      - MILVUS/QDRANT/CHROMADB/LANCEDB/WEAVIATE Arama: Veritabanı detayları")
-        print(f"      - Model Karşılaştırma: Model bazında en iyi sonuçlar")
-        print(f"      - Algoritma Kategorileri: Kategori bazında analiz")
-        print(f"      - Veritabanı Karşılaştırma: DB performans özeti")
+        print(f" Excel: {excel_file}")
+        print(f"   Sayfalar:")
+        print(f"      - Genel Ozet: Meta bilgiler ve yuklenen modeller")
+        print(f"      - Yazma Benchmark: Tum yazma islemleri")
+        print(f"      - Tum Arama Sonuclari: {len(all_results)} arama testi")
+        print(f"      - MILVUS/QDRANT/CHROMADB/LANCEDB/WEAVIATE Arama: Veritabani detaylari")
+        print(f"      - Model Karsilastirma: Model bazinda en iyi sonuclar")
+        print(f"      - Algoritma Kategorileri: Kategori bazinda analiz")
+        print(f"      - Veritabani Karsilastirma: DB performans ozeti")
 
     def print_comprehensive_summary(self):
         """Kapsamlı özet yazdır"""
         print("\n" + "="*80)
-        print("📊 KAPSAMLI BENCHMARK SONUÇ ÖZETİ")
+        print(" KAPSAMLI BENCHMARK SONUC OZETI")
         print("="*80)
         
         # Yazma sonuçları
-        print("\n📝 YAZMA BENCHMARK (Model x Veritabanı):")
+        print("\n YAZMA BENCHMARK (Model x Veritabani):")
         print("-" * 60)
         
         for db in ['milvus_write', 'qdrant_write', 'chromadb_write', 'lancedb_write', 'weaviate_write']:
@@ -1500,7 +1493,7 @@ class VectorDatabaseBenchmark:
                         print(f"    • {model}: {data['write_time']:.2f}s")
         
         # Arama sonuçları
-        print("\n🔍 ARAMA BENCHMARK - EN HIZLI 20:")
+        print("\n ARAMA BENCHMARK - EN HIZLI:")
         print("-" * 80)
         
         all_results = []
@@ -1521,22 +1514,22 @@ class VectorDatabaseBenchmark:
         
         all_results.sort(key=lambda x: x[3])
         
-        for i, (db, model, algo, time_ms, qps) in enumerate(all_results[:20], 1):
-            emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i:2}."
+        for i, (db, model, algo, time_ms, qps) in enumerate(all_results, 1):
+            emoji = "1." if i == 1 else "2." if i == 2 else "3." if i == 3 else f"{i:2}."
             print(f"  {emoji} {db:<10} | {model:<22} | {algo:<20} | {time_ms:8.2f}ms | QPS: {qps:8.0f}")
         
-        print(f"\n📊 Toplam {len(all_results)} arama testi yapıldı.")
+        print(f"\n Toplam {len(all_results)} arama testi yapildi.")
     
     def run_full_multi_model_benchmark(self):
         """Tüm modeller ve veritabanları için kapsamlı benchmark"""
-        print("\n" + "🚀"*40)
-        print("    KAPSAMLI MULTI-MODEL BENCHMARK BAŞLIYOR")
-        print("🚀"*40)
-        print(f"\n📅 Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("\n" + "*"*40)
+        print("    KAPSAMLI MULTI-MODEL BENCHMARK BASLIYOR")
+        print("*"*40)
+        print(f"\n Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # 1. Verileri yükle
         if not self.load_models_data():
-            print("❌ Veri yükleme başarısız!")
+            print(" Veri yukleme basarisiz!")
             return
         
         # 2. Tüm modeller için embedding hesapla
@@ -1544,7 +1537,7 @@ class VectorDatabaseBenchmark:
         
         # 3. Tüm veritabanlarına yaz
         print("\n" + "="*70)
-        print("📝 TÜM MODELLER İÇİN YAZMA BAŞLIYOR")
+        print(" TUM MODELLER ICIN YAZMA BASLIYOR")
         print("="*70)
         
         self.write_all_models_to_milvus()
@@ -1555,7 +1548,7 @@ class VectorDatabaseBenchmark:
         
         # 4. Tüm veritabanlarında arama benchmark
         print("\n" + "="*70)
-        print("🔍 TÜM MODELLER İÇİN ARAMA BENCHMARK BAŞLIYOR")
+        print(" TUM MODELLER ICIN ARAMA BENCHMARK BASLIYOR")
         print("="*70)
         
         self.benchmark_all_models_milvus_search()
@@ -1568,14 +1561,14 @@ class VectorDatabaseBenchmark:
         self.print_comprehensive_summary()
         self.save_comprehensive_results()
         
-        print("\n" + "✅"*40)
+        print("\n" + "*"*40)
         print("    KAPSAMLI BENCHMARK TAMAMLANDI!")
-        print("✅"*40)
+        print("*"*40)
 
 
 if __name__ == "__main__":
     print("="*70)
-    print("🚀 VECTOR DATABASE MULTI-MODEL BENCHMARK")
+    print(" VECTOR DATABASE MULTI-MODEL BENCHMARK")
     print("="*70)
     
     try:
@@ -1586,8 +1579,8 @@ if __name__ == "__main__":
         benchmark.run_full_multi_model_benchmark()
         
     except KeyboardInterrupt:
-        print("\n\n⚠️ Kullanıcı tarafından iptal edildi.")
+        print("\n\n Kullanici tarafindan iptal edildi.")
     except Exception as e:
-        print(f"\n❌ Hata oluştu: {e}")
+        print(f"\n Hata olustu: {e}")
         import traceback
         traceback.print_exc()
