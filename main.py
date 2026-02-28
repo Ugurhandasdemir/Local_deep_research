@@ -21,8 +21,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_PATH = r"C:\Users\hakan\Desktop\bitirme\Local_deep_research\DB\chorame\yerel_veritabani"
-PDF_UPLOAD_DIR = r"C:\Users\hakan\Desktop\bitirme\Local_deep_research\CUSTOM_DATASET\pdfs"
+DB_PATH = os.path.join(os.path.dirname(__file__), "DB", "chorame", "yerel_veritabani")
+PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "CUSTOM_DATASET", "pdfs")
 
 class GirdiVerisi(BaseModel):
     input: str
@@ -67,7 +67,7 @@ def ollama(context_text: str, user_query: str = "", is_deep_research: bool = Fal
         prompt_data = {"content": context_text}
 
     temp = 0 if is_deep_research else 0.7
-    model = OllamaLLM(model="llama3.2:3b", temperature=temp)
+    model = OllamaLLM(model="ministral-3:3b", temperature=temp)
     prompt = ChatPromptTemplate.from_template(template_str)
     
     chain = prompt | model

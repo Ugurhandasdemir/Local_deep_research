@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import '../main.dart';
 import '../models/message.dart';
 import '../screen/pdf_viewer_screen.dart';
 
@@ -9,101 +9,208 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isUser = message.isUser;
+    return message.isUser ? _buildUserBubble(context) : _buildAiBubble(context);
+  }
+
+  // --- User message: light purple bubble, right-aligned, iOS style ---
+  Widget _buildUserBubble(BuildContext context) {
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: Alignment.centerRight,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
+          maxWidth: MediaQuery.of(context).size.width * 0.85,
         ),
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
         decoration: BoxDecoration(
-          color: isUser ? Colors.indigo : Colors.grey.shade200,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              message.text,
-              style: TextStyle(
-                color: isUser ? Colors.white : Colors.black87,
-                fontSize: 16,
-              ),
+          color: AppColors.purpleLight,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(20),
+            topRight: Radius.circular(20),
+            bottomLeft: Radius.circular(20),
+            bottomRight: Radius.circular(4), // iOS-style small corner
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 4,
+              offset: const Offset(0, 1),
             ),
-            const SizedBox(height: 4),
-            Text(
-              DateFormat('HH:mm').format(message.timestamp),
-              style: TextStyle(
-                color: isUser ? Colors.white70 : Colors.black54,
-                fontSize: 10,
-              ),
-            ),
-            isUser
-                ? SizedBox()
-                : message.responseList.isEmpty
-                    ? SizedBox()
-                    : SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.start,
-                          children: List.generate(message.responseList.length, (
-                            index,
-                          ) {
-                            final item = message.responseList[index];
-                            final fileName = item["file"] ?? "PDF ${index + 1}";
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Tooltip(
-                                    message: fileName,
-                                    child: Text(
-                                      "${index + 1}. pdf",
-                                      style: const TextStyle(fontSize: 10),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    onPressed: () {
-                                      debugPrint(
-                                          "message.responseList ${message.responseList}");
-                                      String dosyaUrl =
-                                          item["url"] ?? item["file"] ?? "";
-                                      debugPrint("dosya URL = $dosyaUrl");
-                                      
-                                      if (dosyaUrl.isEmpty) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(
-                                              content: Text("PDF URL bulunamadı")),
-                                        );
-                                        return;
-                                      }
-
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) =>
-                                              PdfViewerScreen(
-                                                pdfDosyaYolu: dosyaUrl,
-                                                isUrl: dosyaUrl
-                                                    .startsWith("http"),
-                                              ),
-                                        ),
-                                      );
-                                    },
-                                    icon: const Icon(Icons.folder_open),
-                                    iconSize: 18,
-                                  ),
-                                ],
-                              ),
-                            );
-                          }),
-                        ),
-                      ),
           ],
+        ),
+        child: Text(
+          message.text,
+          style: const TextStyle(
+            color: Colors.black,
+            fontSize: 17,
+            height: 1.4,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- AI response: plain text with source references ---
+  Widget _buildAiBubble(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Status indicator if sources exist
+          if (message.responseList.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.check_circle,
+                    size: 14,
+                    color: AppColors.statusPurple,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    "${message.responseList.length} PDF Kaynak Analiz Edildi",
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.statusPurple,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          // Main AI text
+          Container(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.92,
+            ),
+            child: SelectableText(
+              message.text,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontSize: 17,
+                height: 1.6,
+              ),
+            ),
+          ),
+          // Source buttons
+          if (message.responseList.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _buildSourcesRow(context),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // --- "View Sources" row matching the HTML design ---
+  Widget _buildSourcesRow(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Compact source chips
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: List.generate(message.responseList.length, (index) {
+            final item = message.responseList[index];
+            final fileName = item["file"] ?? "PDF ${index + 1}";
+            return _buildSourceChip(context, index, fileName, item);
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSourceChip(
+    BuildContext context,
+    int index,
+    String fileName,
+    dynamic item,
+  ) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          String dosyaUrl = item["url"] ?? item["file"] ?? "";
+          if (dosyaUrl.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text("PDF URL bulunamadı"),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            );
+            return;
+          }
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => PdfViewerScreen(
+                pdfDosyaYolu: dosyaUrl,
+                isUrl: dosyaUrl.startsWith("http"),
+              ),
+            ),
+          );
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.divider),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.03),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: AppColors.red.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.picture_as_pdf,
+                  size: 14,
+                  color: AppColors.red,
+                ),
+              ),
+              const SizedBox(width: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 140),
+                child: Text(
+                  fileName,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.text,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                "[${index + 1}]",
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.blue,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

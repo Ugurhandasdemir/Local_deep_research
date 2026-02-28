@@ -10,7 +10,7 @@ class ApiService {
       final response = await http.post(
         Uri.parse("$API_BASE_URL/normal/chat"),
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"girilen_metin": message}),
+        body: jsonEncode({"input": message}),
       );
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
@@ -26,7 +26,7 @@ class ApiService {
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'girilen_metin': message}),
+        body: jsonEncode({'input': message}),
       );
       if (response.statusCode == 200) {
         final decodedBody = utf8.decode(response.bodyBytes);
