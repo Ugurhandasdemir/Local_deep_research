@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Deep Research Chat Interface</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        ios: {
+                            bg: '#F9F9FB', 
+                            blue: '#007AFF',
+                            purple: '#756AB6',
+                            purpleLight: '#EDEAF4',
+                            grayInput: '#F2F2F7',
+                            divider: '#E5E5EA',
+                            red: '#FF3B30', 
+                            text: '#1C1C1E',
+                            subtext: '#8E8E93',
+                            sidebar: '#1c1c1e',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
+                    },
+                    boxShadow: {
+                        'ios-card': '0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0,0,0,0.02)',
+                        'ios-float': '0 4px 20px rgba(0, 0, 0, 0.1)',
+                        'drawer': '4px 0 24px rgba(0,0,0,0.15)',
+                    }
+                }
+            }
+        }
+    </script>
+<style data-purpose="layout">
+        body {background-color: #F9F9FB;
+            min-height: 100vh;overscroll-behavior-y: none;
+        }::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+    </style>
+<style data-purpose="animations">
+        @keyframes spin-slow {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin-slow {
+            animation: spin-slow 2s linear infinite;
+        }
+    </style>
+<style data-purpose="components">
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #007AFF;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #007AFF;
+        }
+        .bubble-user {
+            border-bottom-right-radius: 4px; 
+        }
+        .citation {
+            font-size: 0.75em;
+            vertical-align: super;
+            color: #007AFF;
+            font-weight: 600;
+            text-decoration: none;
+            margin-left: 1px;
+            cursor: pointer;
+        }#drawer-toggle:checked ~ .drawer-overlay {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        #drawer-toggle:checked ~ .drawer-sidebar {
+            transform: translateX(0);
+        }
+        .drawer-overlay {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+        .drawer-sidebar {
+            transform: translateX(-100%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }.custom-select-wrapper {
+            position: relative;
+            user-select: none;
+        }
+        .custom-select {
+            position: relative;
+            cursor: pointer;
+        }
+        .custom-select__trigger {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #fff;
+            background: rgba(255,255,255,0.1);
+            border-radius: 0.75rem;
+            transition: background 0.2s;
+        }
+        .custom-select__trigger:hover {
+            background: rgba(255,255,255,0.15);
+        }
+        .custom-options {
+            position: absolute;
+            display: block;
+            top: 100%;
+            left: 0;
+            right: 0;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 0.75rem;
+            background: #2c2c2e;
+            transition: all 0.3s;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            z-index: 2;
+            margin-top: 0.5rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .custom-select.open .custom-options {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: all;
+        }
+        .custom-option {
+            position: relative;
+            display: block;
+            padding: 0.75rem 1rem;
+            font-size: 0.9rem;
+            color: #e5e5e5;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .custom-option:first-child {
+            border-radius: 0.75rem 0.75rem 0 0;
+        }
+        .custom-option:last-child {
+            border-radius: 0 0 0.75rem 0.75rem;
+        }
+        .custom-option:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+        .custom-option.selected {
+            color: #007AFF;
+            font-weight: 600;
+        }
+        .custom-option.selected::after {
+            content: '\f00c';
+            font-family: 'Font Awesome 6 Free';
+            font-weight: 900;
+            position: absolute;
+            right: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+        .arrow {
+            transition: transform 0.3s;
+        }
+        .custom-select.open .arrow {
+            transform: rotate(180deg);
+        }#header-model-dropdown {
+            transform-origin: top center;
+            transition: all 0.2s ease-out;
+        }
+        #header-model-selector:focus-within #header-model-dropdown,
+        #header-model-checkbox:checked ~ #header-model-dropdown {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+            pointer-events: auto;
+            visibility: visible;
+        }
+        .header-model-chevron {
+            transition: transform 0.3s ease;
+        }
+        #header-model-checkbox:checked ~ label .header-model-chevron {
+            transform: rotate(180deg);
+        }
+    </style>
+<style>
+        body {
+          min-height: max(884px, 100dvh);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="antialiased text-gray-900 flex flex-col h-screen overflow-hidden relative">
+<input class="peer sr-only" id="drawer-toggle" type="checkbox"/>
+<label class="drawer-overlay fixed inset-0 bg-black/30 z-[60] backdrop-blur-sm cursor-pointer" for="drawer-toggle"></label>
+<aside class="drawer-sidebar fixed top-0 left-0 h-full w-[280px] bg-ios-sidebar shadow-drawer z-[70] flex flex-col text-white">
+<div class="p-6 border-b border-white/10 flex justify-between items-center">
+<h2 class="text-xl font-bold tracking-tight">Settings</h2>
+<label class="cursor-pointer p-2 -mr-2 text-gray-400 hover:text-white transition-colors" for="drawer-toggle">
+<i class="fa-solid fa-xmark text-lg"></i>
+</label>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-6">
+<div class="space-y-2">
+<div class="text-xs font-semibold text-gray-500 uppercase tracking-wider px-2">AI Model</div>
+<div class="custom-select-wrapper">
+<div class="custom-select" onclick="this.classList.toggle('open')">
+<div class="custom-select__trigger">
+<span>Gemini 1.5 Pro</span>
+<div class="arrow">
+<i class="fa-solid fa-chevron-down text-xs text-gray-400"></i>
+</div>
+</div>
+<div class="custom-options">
+<span class="custom-option" data-value="gpt-4o">GPT-4o</span>
+<span class="custom-option" data-value="claude-3-5">Claude 3.5 Sonnet</span>
+<span class="custom-option selected" data-value="gemini-1-5">Gemini 1.5 Pro</span>
+</div>
+</div>
+</div>
+</div>
+<div class="space-y-4">
+<div class="text-xs font-semibold text-gray-500 uppercase tracking-wider px-2">Uploaded Documents</div>
+<div class="space-y-2">
+<div class="group flex items-center p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-transparent hover:border-white/10">
+<div class="w-8 h-8 rounded-lg bg-red-500/20 flex items-center justify-center mr-3 text-red-400">
+<i class="fa-solid fa-file-pdf"></i>
+</div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-medium text-gray-200 truncate">Google_Quantum_AI_Report_2024.pdf</p>
+<p class="text-xs text-gray-500 mt-0.5">2.4 MB • Added today</p>
+</div>
+</div>
+<div class="group flex items-center p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-transparent hover:border-white/10">
+<div class="w-8 h-8 rounded-lg bg-red-500/20 flex items-center justify-center mr-3 text-red-400">
+<i class="fa-solid fa-file-pdf"></i>
+</div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-medium text-gray-200 truncate">Molecular_Simulations_Review.pdf</p>
+<p class="text-xs text-gray-500 mt-0.5">1.1 MB • Added today</p>
+</div>
+</div>
+<div class="group flex items-center p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-transparent hover:border-white/10">
+<div class="w-8 h-8 rounded-lg bg-red-500/20 flex items-center justify-center mr-3 text-red-400">
+<i class="fa-solid fa-file-pdf"></i>
+</div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-medium text-gray-200 truncate">IBM_Osprey_Specs.pdf</p>
+<p class="text-xs text-gray-500 mt-0.5">5.8 MB • Yesterday</p>
+</div>
+</div>
+<div class="group flex items-center p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-transparent hover:border-white/10">
+<div class="w-8 h-8 rounded-lg bg-red-500/20 flex items-center justify-center mr-3 text-red-400">
+<i class="fa-solid fa-file-pdf"></i>
+</div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-medium text-gray-200 truncate">Annual_Physics_Review_v2.pdf</p>
+<p class="text-xs text-gray-500 mt-0.5">3.2 MB • Yesterday</p>
+</div>
+</div>
+<div class="group flex items-center p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-transparent hover:border-white/10">
+<div class="w-8 h-8 rounded-lg bg-red-500/20 flex items-center justify-center mr-3 text-red-400">
+<i class="fa-solid fa-file-pdf"></i>
+</div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-medium text-gray-200 truncate">Battery_Tech_Optimization.pdf</p>
+<p class="text-xs text-gray-500 mt-0.5">4.0 MB • 2 days ago</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="p-6 border-t border-white/10 bg-[#1c1c1e]">
+<button class="w-full bg-ios-blue hover:bg-blue-600 text-white font-semibold py-3 px-4 rounded-xl flex items-center justify-center transition-colors shadow-lg shadow-blue-500/20">
+<i class="fa-solid fa-cloud-arrow-up mr-2"></i>
+                Upload New PDF
+            </button>
+</div>
+</aside>
+<header class="flex-none bg-white/90 backdrop-blur-md sticky top-0 z-50 border-b border-gray-200/50 pt-safe-top">
+<div class="flex items-center justify-between px-4 h-[54px] relative">
+<label class="flex items-center text-ios-blue text-xl px-2 -ml-2 active:opacity-50 transition-opacity cursor-pointer" for="drawer-toggle">
+<i class="fa-solid fa-bars"></i>
+</label>
+<div class="absolute left-1/2 transform -translate-x-1/2 z-50" id="header-model-selector">
+<input class="peer sr-only" id="header-model-checkbox" type="checkbox"/>
+<label class="flex items-center space-x-2 px-4 py-2 bg-gray-100 rounded-full hover:bg-gray-200 active:bg-gray-300 transition-colors cursor-pointer group select-none border border-transparent" for="header-model-checkbox">
+<span class="material-symbols-outlined text-[20px] text-gray-700 group-hover:text-gray-900">smart_toy</span>
+<span class="text-[15px] font-semibold text-gray-700 group-hover:text-gray-900">Select Model</span>
+<i class="fa-solid fa-chevron-down text-[10px] text-gray-500 header-model-chevron"></i>
+</label>
+<div class="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 w-[240px] bg-white rounded-xl shadow-ios-float border border-gray-100 opacity-0 invisible pointer-events-none p-1.5" id="header-model-dropdown">
+<div class="flex flex-col">
+<button class="flex items-center justify-between w-full px-3 py-2.5 text-left text-[15px] font-medium text-gray-900 hover:bg-gray-50 rounded-lg group transition-colors">
+<div class="flex items-center space-x-2.5">
+<span class="material-symbols-outlined text-[18px] text-green-600">bolt</span>
+<span>GPT-4o</span>
+</div>
+</button>
+<button class="flex items-center justify-between w-full px-3 py-2.5 text-left text-[15px] font-medium text-gray-900 hover:bg-gray-50 rounded-lg group transition-colors">
+<div class="flex items-center space-x-2.5">
+<span class="material-symbols-outlined text-[18px] text-orange-600">psychology</span>
+<span>Claude 3.5 Sonnet</span>
+</div>
+</button>
+<button class="flex items-center justify-between w-full px-3 py-2.5 text-left text-[15px] font-medium text-ios-blue bg-blue-50/50 rounded-lg group transition-colors">
+<div class="flex items-center space-x-2.5">
+<span class="material-symbols-outlined text-[18px] text-ios-blue">colors_spark</span>
+<span>Gemini 1.5 Pro</span>
+</div>
+<i class="fa-solid fa-check text-xs text-ios-blue"></i>
+</button>
+</div>
+</div>
+</div>
+<button class="text-ios-blue text-xl px-2 active:opacity-50 transition-opacity">
+<i class="fa-solid fa-ellipsis"></i>
+</button>
+</div>
+</header>
+<main class="flex-1 overflow-y-auto px-4 pt-6 space-y-6 pb-[120px]" id="chat-container">
+<div class="flex justify-center -mt-2 mb-4">
+<div class="bg-gray-100/80 backdrop-blur px-3 py-1 rounded-full border border-gray-200 shadow-sm flex items-center space-x-1.5">
+<i class="fa-solid fa-sparkles text-xs text-ios-purple"></i>
+<span class="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Using: Gemini 1.5 Pro</span>
+</div>
+</div>
+<div class="flex justify-end w-full">
+<div class="bg-ios-purpleLight text-black px-5 py-3.5 rounded-2xl bubble-user max-w-[85%] text-[17px] leading-snug shadow-sm" data-purpose="user-message">
+                Tell me about the latest advancements in quantum computing.
+            </div>
+</div>
+<div class="flex items-center space-x-2 animate-pulse mt-8 text-[#6B66C5]" data-purpose="status-indicator">
+<i class="fa-solid fa-circle-check text-sm"></i>
+<span class="text-xs font-semibold tracking-wide uppercase">Analyzed 5 PDF Sources</span>
+</div>
+<div class="space-y-4">
+<div class="text-[17px] leading-[1.6] text-[#1C1C1E] space-y-4" data-purpose="ai-text-response">
+<p>
+                    Based on the analysis of recent reports, 2024 has marked a significant turning point in quantum computing scalability and error correction.
+                </p>
+<p>
+                    Google Quantum AI has successfully demonstrated a prototype of logical qubits that outperform physical qubits in error rates, effectively crossing the "break-even" point for quantum error correction<span class="citation">[1]</span>. This is a critical step towards fault-tolerant quantum computing, suggesting that we can now suppress errors faster than they occur by scaling up the number of physical qubits.
+                </p>
+<p>
+                    Meanwhile, IBM's release of the 'Osprey' processor with 433 qubits has set a new benchmark for processor density<span class="citation">[3]</span>. The architecture introduces new cryogenic cabling techniques to manage heat dissipation, a major hurdle for previous generations.
+                </p>
+<p>
+                    In the realm of materials science, researchers have utilized these early noisy intermediate-scale quantum (NISQ) devices to simulate molecular interactions with higher accuracy than classical supercomputers<span class="citation">[2]</span>. This has immediate implications for drug discovery and battery technology optimization<span class="citation">[5]</span>.
+                </p>
+<p>
+                    However, challenges remain in maintaining coherence times for extended calculations, as highlighted in the Annual Review of Physics<span class="citation">[4]</span>.
+                </p>
+</div>
+<div class="pt-4 mt-2 flex items-center">
+<button class="group flex items-center space-x-2 text-ios-subtext hover:text-ios-blue transition-colors px-0 py-2">
+<span class="text-[13px] font-medium">View Sources</span>
+<div class="flex -space-x-1 opacity-60 group-hover:opacity-100 transition-opacity">
+<span class="text-[10px] bg-gray-100 px-1 rounded text-gray-500 font-bold border border-gray-200">PDF</span>
+<span class="text-[10px] bg-gray-100 px-1 rounded text-gray-500 font-bold border border-gray-200">PDF</span>
+<span class="text-[10px] bg-gray-100 px-1 rounded text-gray-500 font-bold border border-gray-200">PDF</span>
+</div>
+<i class="fa-solid fa-chevron-right text-[10px] ml-1"></i>
+</button>
+</div>
+</div>
+</main>
+<footer class="fixed bottom-0 w-full px-4 pb-6 pt-2 z-40 bg-gradient-to-t from-white via-white to-transparent">
+<div class="bg-white rounded-[24px] shadow-ios-float border border-gray-100 p-4" data-purpose="input-container">
+<div class="bg-[#F2F2F7] rounded-xl px-4 py-3 mb-4">
+<input aria-label="Chat input" class="w-full bg-transparent text-[17px] text-gray-900 placeholder-gray-500 focus:outline-none border-none p-0 focus:ring-0 leading-normal" placeholder="Ask anything..." type="text"/>
+</div>
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-3">
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer" type="checkbox" value=""/>
+<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-ios-blue"></div>
+<span class="ml-3 text-[15px] font-semibold text-[#333333]">Deep Research</span>
+</label>
+</div>
+<div class="flex items-center gap-[12px]">
+<button class="text-gray-400 hover:text-gray-600 transition-colors transform rotate-45">
+<i class="fa-solid fa-paperclip text-xl"></i>
+</button>
+<button class="bg-ios-blue text-white w-9 h-9 rounded-full flex items-center justify-center hover:bg-blue-600 transition-colors shadow-sm active:scale-95">
+<i class="fa-solid fa-arrow-up text-white text-sm font-bold"></i>
+</button>
+</div>
+</div>
+</div>
+</footer>
+</body></html>

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import '../main.dart';
 import '../models/message.dart';
 import '../screen/pdf_viewer_screen.dart';
@@ -69,7 +70,7 @@ class MessageBubble extends StatelessWidget {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    "${message.responseList.length} PDF Kaynak Analiz Edildi",
+                    "Analyzed ${message.responseList.length} PDF Sources",
                     style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -81,19 +82,25 @@ class MessageBubble extends StatelessWidget {
               ),
             ),
           // Main AI text
-          Container(
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.92,
-            ),
-            child: SelectableText(
-              message.text,
-              style: const TextStyle(
-                color: AppColors.text,
-                fontSize: 17,
-                height: 1.6,
+            Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.92,
+              ),
+              child: MarkdownBody(
+                data: message.text,
+                styleSheet: MarkdownStyleSheet(
+                  p: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 17,
+                    height: 1.6,
+                  ),
+                  strong: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.text,
+                  ),
+                ),
               ),
             ),
-          ),
           // Source buttons
           if (message.responseList.isNotEmpty) ...[
             const SizedBox(height: 16),
@@ -109,6 +116,54 @@ class MessageBubble extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // "View Sources" button style header
+        GestureDetector(
+          onTap: () {
+            // nothing for now - user can tap individual items below
+          },
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "View Sources",
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.subtext,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Row(
+                children: List.generate(message.responseList.length, (_) {
+                  return Container(
+                    margin: const EdgeInsets.only(left: -6),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.grey.shade200),
+                    ),
+                    child: const Text(
+                      "PDF",
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  );
+                }),
+              ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.chevron_right,
+                size: 10,
+                color: Colors.grey,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
         // Compact source chips
         Wrap(
           spacing: 8,

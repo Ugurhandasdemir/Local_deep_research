@@ -26,6 +26,7 @@ PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "CUSTOM_DATASET", "pdfs
 
 class GirdiVerisi(BaseModel):
     input: str
+    model: str = "ministral-3:3b"  # model identifier sent from client
 
 class PDFMetniVerisi(BaseModel):
     pdf_metni: str
@@ -46,7 +47,7 @@ from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
 
 
-def ollama(context_text: str, user_query: str = "", is_deep_research: bool = False) -> str:
+def ollama(context_text: str, user_query: str = "", is_deep_research: bool = False, model_name: str = "ministral-3:3b") -> str:
     if is_deep_research:
         template_str = """
         System:
@@ -67,7 +68,7 @@ def ollama(context_text: str, user_query: str = "", is_deep_research: bool = Fal
         prompt_data = {"content": context_text}
 
     temp = 0 if is_deep_research else 0.7
-    model = OllamaLLM(model="ministral-3:3b", temperature=temp)
+    model = OllamaLLM(model=model_name, temperature=temp)
     prompt = ChatPromptTemplate.from_template(template_str)
     
     chain = prompt | model
@@ -131,7 +132,8 @@ def askQuestionAI(veri: GirdiVerisi) -> Dict[str, Any]:
         final_report = ollama(
             context_text=context_for_ai, 
             user_query=veri.input, 
-            is_deep_research=True
+            is_deep_research=True,
+            model_name=veri.model
         )
 
         sources = []
@@ -329,7 +331,7 @@ async def normalChat(veri: GirdiVerisi) -> Dict[str, Any]:
             }
         
         
-        summary_result = ollama(veri.input)
+        summary_result = ollama(veri.input, model_name=veri.model)
         
         return {
             "status": "success",

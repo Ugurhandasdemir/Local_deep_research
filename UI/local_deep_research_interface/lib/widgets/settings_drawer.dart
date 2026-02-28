@@ -3,21 +3,36 @@ import 'package:intl/intl.dart';
 import '../main.dart';
 import '../models/chat_session.dart';
 
-class SourcesDrawer extends StatelessWidget {
+class SettingsDrawer extends StatelessWidget {
+  // existing chat history parameters are kept for backward compatibility,
+  // but the drawer now primarily shows settings and uploaded documents.
   final List<ChatSession> chatHistory;
   final String? currentSessionId;
   final VoidCallback onNewChat;
   final Function(String) onLoadSession;
   final Function(String) onDeleteSession;
+
+  // model selection
+  final List<String> modelOptions;
+  final String selectedModel;
+  final Function(String) onModelChanged;
+
+  // documents uploaded by user
+  final List<Map<String, dynamic>> uploadedDocs;
+
   final VoidCallback onUploadPdf;
 
-  const SourcesDrawer({
+  const SettingsDrawer({
     super.key,
     required this.chatHistory,
     required this.currentSessionId,
     required this.onNewChat,
     required this.onLoadSession,
     required this.onDeleteSession,
+    required this.modelOptions,
+    required this.selectedModel,
+    required this.onModelChanged,
+    required this.uploadedDocs,
     required this.onUploadPdf,
   });
 
@@ -46,8 +61,8 @@ class SourcesDrawer extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    "Sources",
+                        const Text(
+                    "Settings",
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 20,
@@ -67,46 +82,66 @@ class SourcesDrawer extends StatelessWidget {
               ),
             ),
 
-            // --- Chat History Section ---
+            // --- Main scrollable area with settings and documents ---
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  // New Chat button
-                  _buildNewChatButton(context),
-                  const SizedBox(height: 20),
-
-                  // Section Label
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  // model selector section
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
                     child: Text(
-                      "SOHBET GEÇMİŞİ",
+                      "AI Model",
                       style: TextStyle(
-                        color: Colors.grey.shade600,
+                        color: Colors.grey,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        letterSpacing: 1.2,
+                        letterSpacing: 1.5,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
+                  _buildModelDropdown(context),
+                  const SizedBox(height: 24),
 
-                  // Chat sessions
-                  if (chatHistory.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 24),
-                      child: Center(
-                        child: Text(
-                          "Henüz sohbet yok",
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 14,
-                          ),
+                  // uploaded documents section
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text(
+                      "Uploaded Documents",
+                      style: TextStyle(
+                        color: Colors.grey,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ...uploadedDocs.map((doc) => _buildDocumentTile(context, doc)),
+
+                  const SizedBox(height: 24),
+
+                  // optional chat history at bottom
+                  if (chatHistory.isNotEmpty) ...[
+                    // new chat button inside history section
+                    _buildNewChatButton(context),
+                    const SizedBox(height: 20),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8),
+                      child: Text(
+                        "SOHBET GEÇMİŞİ",
+                        style: TextStyle(
+                          color: Colors.grey,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1.2,
                         ),
                       ),
-                    )
-                  else
+                    ),
+                    const SizedBox(height: 10),
                     ...chatHistory.map((session) => _buildSessionTile(context, session)),
+                  ],
                 ],
               ),
             ),
@@ -149,6 +184,103 @@ class SourcesDrawer extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModelDropdown(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: DropdownButton<String>(
+        value: selectedModel,
+        dropdownColor: AppColors.sidebar,
+        underline: const SizedBox.shrink(),
+        isExpanded: true,
+        iconEnabledColor: Colors.white,
+        style: const TextStyle(color: Colors.white, fontSize: 15),
+        items: modelOptions
+            .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+            .toList(),
+        onChanged: (val) {
+          if (val != null) onModelChanged(val);
+        },
+      ),
+    );
+  }
+
+  Widget _buildDocumentTile(BuildContext context, Map<String, dynamic> doc) {
+    final String name = doc['name'] ?? '';
+    final double sizeMb = doc['sizeMb'] ?? 0.0;
+    final DateTime added = doc['added'] ?? DateTime.now();
+    String subtitle = "${sizeMb.toStringAsFixed(1)} MB";
+    final diff = DateTime.now().difference(added);
+    if (diff.inDays == 0) {
+      subtitle += " • Added today";
+    } else if (diff.inDays == 1) {
+      subtitle += " • Yesterday";
+    } else {
+      subtitle += " • ${diff.inDays} days ago";
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: GestureDetector(
+        onTap: () {},
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.transparent),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: AppColors.red.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.picture_as_pdf,
+                  color: AppColors.red,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: Colors.grey.shade500,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

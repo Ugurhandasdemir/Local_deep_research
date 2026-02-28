@@ -5,12 +5,14 @@ import 'package:http/http.dart' as http;
 const String API_BASE_URL = 'http://127.0.0.1:8000';
 
 class ApiService {
-  static Future<String> normalChat(String message) async {
+  static Future<String> normalChat(String message, {String? model}) async {
     try {
+      final payload = {"input": message};
+      if (model != null) payload["model"] = model;
       final response = await http.post(
         Uri.parse("$API_BASE_URL/normal/chat"),
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"input": message}),
+        body: jsonEncode(payload),
       );
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
@@ -20,13 +22,15 @@ class ApiService {
     } catch (e) { return "Bağlantı hatası: $e"; }
   }
 
-  static Future<List> getApiResponse(String message) async {
+  static Future<List> getApiResponse(String message, {String? model}) async {
     final url = Uri.parse('$API_BASE_URL/ask/question/ai');
     try {
+      final body = {'input': message};
+      if (model != null) body['model'] = model;
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'input': message}),
+        body: jsonEncode(body),
       );
       if (response.statusCode == 200) {
         final decodedBody = utf8.decode(response.bodyBytes);
