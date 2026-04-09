@@ -68,7 +68,15 @@ def ollama(context_text: str, user_query: str = "", is_deep_research: bool = Fal
         prompt_data = {"content": context_text}
 
     temp = 0 if is_deep_research else 0.7
-    model = OllamaLLM(model=model_name, temperature=temp)
+
+    # Qwen gibi büyük modeller varsayılan olarak çok fazla VRAM kullanıyor
+    # num_ctx ile context penceresini küçülttük, num_predict ile max cevap uzunluğunu sınırladık
+    model = OllamaLLM(
+        model=model_name,
+        temperature=temp,
+        num_ctx=2048,       # varsayılan 32k yerine 2048 token — VRAM çok düşüyor
+        num_predict=512,    # cevap en fazla 512 token olsun
+    )
     prompt = ChatPromptTemplate.from_template(template_str)
     
     chain = prompt | model

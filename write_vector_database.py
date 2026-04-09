@@ -1,6 +1,8 @@
+
 import time
 import psutil
 import os
+import gc
 import json
 import glob
 from typing import Dict, List, Optional, Tuple
@@ -9,10 +11,16 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import datetime
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModel, AutoModelForQuestionAnswering
 import torch
 import warnings
 warnings.filterwarnings('ignore')
+
+def free_gpu_memory():
+    """GPU belleğini temizle"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
 # Database imports
 import lancedb
@@ -25,71 +33,53 @@ from weaviate.classes.config import Property, DataType, Configure
 
 
 class VectorDatabaseBenchmark:
-  
-    def __init__(self, models_path: str = None, db_base_path: str = None):
+
+    # Tüm embedding modelleri — hepsi SentenceTransformer, 4GB VRAM'e sığar
+    MODEL_CONFIGS = {
+        "minilm_v2":          {"hf_name": "all-MiniLM-L6-v2",                        "dim": 384,  "description": "Hafif, hizli genel amacli embedding"},
+        "mpnet_v2":           {"hf_name": "all-mpnet-base-v2",                       "dim": 768,  "description": "Yuksek kaliteli genel amacli embedding"},
+        "multilingual_minilm":{"hf_name": "paraphrase-multilingual-MiniLM-L12-v2",  "dim": 384,  "description": "Cok dilli hafif embedding"},
+        "distilroberta":      {"hf_name": "all-distilroberta-v1",                    "dim": 768,  "description": "RoBERTa tabanli embedding"},
+        "multi_qa_minilm":    {"hf_name": "multi-qa-MiniLM-L6-cos-v1",              "dim": 384,  "description": "Soru-cevap/bilgi erisim optimizeli embedding"},
+    }
+
+    def __init__(self, db_base_path: str = None):
         self.base_path = "/home/ugo/Documents/Python/bitirememe projesi"
-        self.models_path = models_path or os.path.join(self.base_path, "models")
         self.db_base_path = db_base_path or os.path.join(self.base_path, "DB")
-        
-        # Model bilgileri
-        self.model_info = {
-            "embedding_model": {
-                "name": "all-MiniLM-L6-v2",
+        self.custom_dataset_path = os.path.join(self.base_path, "CUSTOM_DATASET")
+
+        # Model bilgileri (Excel/JSON metadata icin)
+        self.model_info = {}
+        for key, cfg in self.MODEL_CONFIGS.items():
+            self.model_info[key] = {
+                "name": cfg["hf_name"],
                 "type": "SentenceTransformer",
-                "vector_dim": 384,
-                "description": "Hafif embedding modeli"
-            },
-            "deberta_qa_model": {
-                "name": "deberta_v3_qa_model",
-                "type": "DeBERTa-v3-QA",
-                "path": os.path.join(self.models_path, "deberta_v3_qa_model"),
-                "description": "DeBERTa v3 Soru-Cevap modeli"
-            },
-            "electra_qa_model": {
-                "name": "electra_english_qa_model",
-                "type": "ELECTRA-QA",
-                "path": os.path.join(self.models_path, "electra_english_qa_model"),
-                "description": "ELECTRA Soru-Cevap modeli"
-            },
-            "qa_model": {
-                "name": "qa_model",
-                "type": "QA-Model",
-                "path": os.path.join(self.models_path, "qa_model"),
-                "description": "Genel Soru-Cevap modeli"
-            },
-            "xlm_roberta_qa_model": {
-                "name": "xlm_roberta_qa_model",
-                "type": "XLM-RoBERTa-QA",
-                "path": os.path.join(self.models_path, "xlm_roberta_qa_model"),
-                "description": "XLM-RoBERTa çok dilli model"
+                "vector_dim": cfg["dim"],
+                "description": cfg["description"],
+                "status": "pending"
             }
-        }
-        
-        # Modelleri yükle
-        print(" MODELLER YÜKLENIYOR")
-        print("="*70)
-        
-        # Model storage
-        self.models = {}
-        self.tokenizers = {}
-        self.vector_dims = {}
-        self.all_embeddings = {}  # Her model için ayrı embedding
-        self.all_query_vectors = {}  # Her model için ayrı sorgu vektörleri
-        
-        # 1. SentenceTransformer
-        print(f"\n SentenceTransformer: all-MiniLM-L6-v2")
-        self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-        self.vector_dim = 384
-        self.models['sentence_transformer'] = self.embedding_model
-        self.vector_dims['sentence_transformer'] = 384
-        self.model_info['embedding_model']['status'] = 'loaded'
-        print("   Loaded (dim: 384)")
-        
-        # 2-5. Diğer modeller
-        for model_key in ['deberta_qa_model', 'electra_qa_model', 'qa_model', 'xlm_roberta_qa_model']:
-            self._load_model(model_key)
-        
-        # Test sorguları
+
+        print(" EMBEDDING MODELLERI")
+        print("=" * 70)
+
+        # GPU ayarlari
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"\n GPU: {gpu_name} ({vram_gb:.1f} GB VRAM)")
+            print(f"   4GB VRAM stratejisi: modeller tek tek GPU'ya alinir.")
+        else:
+            print("\n GPU bulunamadi, CPU kullanilacak.")
+
+        for key, cfg in self.MODEL_CONFIGS.items():
+            print(f"   {key}: {cfg['hf_name']} (dim={cfg['dim']})")
+
+        # Embedding'ler prepare_all_embeddings'te hesaplanacak
+        self.all_embeddings = {}
+        self.all_query_vectors = {}
+
+        # Test sorgulari
         self.test_queries = [
             "artificial intelligence healthcare applications",
             "machine learning medical diagnosis systems",
@@ -102,9 +92,37 @@ class VectorDatabaseBenchmark:
             "recurrent neural networks sequence modeling",
             "generative adversarial networks image synthesis"
         ]
-        
-        # Sonuçlar
-        self.results = {
+
+        # Checkpoint
+        self.json_file = os.path.join(self.base_path, "multi_model_benchmark_results.json")
+        self.results = self._load_checkpoint()
+
+        self.documents = []
+
+    def _load_checkpoint(self) -> dict:
+        """Mevcut JSON checkpoint varsa yükle, model listesi uyuşmazsa sıfırla"""
+        current_models = set(self.MODEL_CONFIGS.keys())
+        if os.path.exists(self.json_file):
+            try:
+                with open(self.json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if "multi_model_benchmark" in data:
+                    # Model listesi değiştiyse eski checkpoint geçersiz
+                    old_models = set(data.get("metadata", {}).get("model_keys", []))
+                    if old_models and old_models != current_models:
+                        print(f"\n Model listesi degisti — eski checkpoint gecersiz, sifirdan baslanacak")
+                        print(f"   Eski: {old_models}")
+                        print(f"   Yeni: {current_models}")
+                    else:
+                        done = [k for k in data["multi_model_benchmark"]]
+                        print(f"\n CHECKPOINT YUKLENDI: {self.json_file}")
+                        print(f"   Tamamlanan adimlar: {', '.join(done)}")
+                        data["metadata"]["models"] = self.model_info
+                        data["metadata"]["model_keys"] = list(current_models)
+                        return data
+            except Exception as e:
+                print(f" Checkpoint yuklenemedi ({e}), sifirdan baslanacak")
+        return {
             "write_benchmark": {},
             "search_benchmark": {},
             "model_benchmark": {},
@@ -112,143 +130,76 @@ class VectorDatabaseBenchmark:
             "metadata": {
                 "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 "query_count": len(self.test_queries),
-                "models": self.model_info
+                "models": self.model_info,
+                "model_keys": list(current_models)
             }
         }
-        
-        self.documents = []
-    
-    def _load_model(self, model_key: str):
-        fallback_models = {
-            'deberta_qa_model': 'microsoft/deberta-v3-base',
-            'electra_qa_model': 'google/electra-base-discriminator',
-            'qa_model': 'bert-base-uncased',
-            'xlm_roberta_qa_model': 'xlm-roberta-base'
-        }
-        
-        model_path = self.model_info[model_key]['path']
-        model_name = self.model_info[model_key]['name']
-        fallback = fallback_models.get(model_key, 'bert-base-uncased')
-        
-        print(f"\n Model: {model_name}")
-        print(f"   Yol: {model_path}")
-        
-        try:
-            if os.path.exists(model_path) and os.path.exists(os.path.join(model_path, "model.safetensors")):
-                print(f"  Model dosyasi bulundu")
-                
-                try:
-                    tokenizer = AutoTokenizer.from_pretrained(model_path)
-                except:
-                    tokenizer = AutoTokenizer.from_pretrained(fallback)
-                
-                try:
-                    model = AutoModelForQuestionAnswering.from_pretrained(model_path)
-                    self.model_info[model_key]['model_type'] = 'QuestionAnswering'
-                except:
-                    try:
-                        model = AutoModel.from_pretrained(model_path)
-                        self.model_info[model_key]['model_type'] = 'BaseModel'
-                    except:
-                        model = AutoModel.from_pretrained(fallback)
-                        self.model_info[model_key]['model_type'] = 'Fallback'
-                
-                vector_dim = model.config.hidden_size
-                self.models[model_key] = model
-                self.tokenizers[model_key] = tokenizer
-                self.vector_dims[model_key] = vector_dim
-                self.model_info[model_key]['vector_dim'] = vector_dim
-                self.model_info[model_key]['status'] = 'loaded'
-                print(f"   Loaded (dim: {vector_dim})")
-            else:
-                print(f"   Model bulunamadi")
-                self.model_info[model_key]['status'] = 'not_found'
-        except Exception as e:
-            print(f"    Hata: {e}")
-            self.model_info[model_key]['status'] = 'error'
-    
-    def _get_model_embeddings(self, model_key: str, texts: List[str]) -> List[List[float]]:
-        """Belirli bir model ile embedding oluştur"""
-        if model_key == 'sentence_transformer':
-            return self.embedding_model.encode(texts, show_progress_bar=False).tolist()
-        
-        model = self.models.get(model_key)
-        tokenizer = self.tokenizers.get(model_key)
-        
-        if model is None or tokenizer is None:
-            return None
-        
-        embeddings = []
-        model.eval()
-        
-        with torch.no_grad():
-            for text in texts:
-                inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512, padding=True)
-                
-                try:
-                    if hasattr(model, 'deberta'):
-                        outputs = model.deberta(**inputs)
-                    elif hasattr(model, 'electra'):
-                        outputs = model.electra(**inputs)
-                    elif hasattr(model, 'roberta'):
-                        outputs = model.roberta(**inputs)
-                    elif hasattr(model, 'bert'):
-                        outputs = model.bert(**inputs)
-                    else:
-                        outputs = model(**inputs, output_hidden_states=True)
-                        if hasattr(outputs, 'hidden_states') and outputs.hidden_states:
-                            outputs.last_hidden_state = outputs.hidden_states[-1]
-                except:
-                    outputs = model(**inputs)
-                
-                if hasattr(outputs, 'last_hidden_state'):
-                    last_hidden = outputs.last_hidden_state
-                else:
-                    last_hidden = outputs[0]
-                
-                attention_mask = inputs['attention_mask']
-                mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
-                sum_embeddings = torch.sum(last_hidden * mask_expanded, 1)
-                sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
-                embedding = (sum_embeddings / sum_mask).squeeze().tolist()
-                embeddings.append(embedding)
-        
-        return embeddings
-    
+
+    def _save_checkpoint(self, step_name: str = ""):
+        """Her adım sonrası JSON'a kaydet"""
+        with open(self.json_file, 'w', encoding='utf-8') as f:
+            json.dump(self.results, f, indent=2, ensure_ascii=False, default=str)
+        if step_name:
+            print(f"   [CHECKPOINT] {step_name} kaydedildi")
+
+    def _is_step_done(self, step_key: str) -> bool:
+        """Bu adım daha önce tamamlanmış mı?"""
+        data = self.results.get("multi_model_benchmark", {}).get(step_key)
+        if data is None:
+            return False
+        if isinstance(data, dict) and data.get("error"):
+            return False
+        if "_search" in step_key and isinstance(data, dict):
+            for model_data in data.values():
+                if isinstance(model_data, dict) and len(model_data) > 0:
+                    return True
+            return False
+        return True
+
     def prepare_all_embeddings(self):
-        """Tüm modeller için embedding'leri hazırla"""
-        print(" TUM MODELLER ICIN EMBEDDING'LER HAZIRLANIYOR")
-        print("="*70)
-        
+        """
+        Tum modeller icin embedding'leri hazirla.
+        4GB VRAM stratejisi: Tek seferde yalnizca bir model GPU'da olur,
+        encode bittikten sonra model bellekten silinir.
+        """
+        print("\n TUM MODELLER ICIN EMBEDDING'LER HAZIRLANIYOR")
+        print("=" * 70)
+        if torch.cuda.is_available():
+            vram = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"   Kullanilabilir VRAM: {vram:.1f} GB")
+
         texts = [doc["text"] for doc in self.documents]
-        
-        for model_key in ['sentence_transformer', 'deberta_qa_model', 'electra_qa_model', 'qa_model', 'xlm_roberta_qa_model']:
-            if model_key == 'sentence_transformer' or self.models.get(model_key) is not None:
-                print(f"\n {model_key} embedding'leri hesaplanıyor...")
-                start_time = time.time()
-                
-                if model_key == 'sentence_transformer':
-                    self.all_embeddings[model_key] = self.embedding_model.encode(texts, show_progress_bar=True).tolist()
-                    self.all_query_vectors[model_key] = [self.embedding_model.encode(q).tolist() for q in self.test_queries]
-                else:
-                    # Batch processing for transformer models
-                    embeddings = []
-                    batch_size = 32
-                    for i in range(0, len(texts), batch_size):
-                        batch = texts[i:i+batch_size]
-                        batch_emb = self._get_model_embeddings(model_key, batch)
-                        if batch_emb:
-                            embeddings.extend(batch_emb)
-                        print(f"   {min(i+batch_size, len(texts))}/{len(texts)} islendi...")
-                    
-                    if embeddings:
-                        self.all_embeddings[model_key] = embeddings
-                        self.all_query_vectors[model_key] = self._get_model_embeddings(model_key, self.test_queries)
-                
+        print(f"   Dokuman sayisi: {len(texts)}")
+
+        for model_key, cfg in self.MODEL_CONFIGS.items():
+            hf_name = cfg["hf_name"]
+            print(f"\n {model_key} ({hf_name}) embedding'leri hesaplaniyor...")
+            start_time = time.time()
+
+            try:
+                # Modeli yukle → GPU'ya al → encode → sil → VRAM temizle
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                model = SentenceTransformer(hf_name, device=device)
+
+                self.all_embeddings[model_key] = model.encode(
+                    texts, show_progress_bar=True, batch_size=64
+                ).tolist()
+                self.all_query_vectors[model_key] = model.encode(
+                    self.test_queries, show_progress_bar=False
+                ).tolist()
+
+                self.model_info[model_key]["status"] = "loaded"
+
+                # Modeli bellekten sil — bir sonraki model icin yer ac
+                del model
+                free_gpu_memory()
+
                 elapsed = time.time() - start_time
-                print(f"   : {model_key}: {elapsed:.2f}s ({len(texts)} dokuman)")
-            else:
-                print(f"\n Model {model_key} yuklenmedigi icin atlanıyor")
+                print(f"   Tamamlandi: {elapsed:.1f}s ({len(texts)} dokuman, dim={cfg['dim']})")
+
+            except Exception as e:
+                print(f"   HATA: {model_key} yuklenemedi: {e}")
+                self.model_info[model_key]["status"] = "error"
     
     # ==================== MULTI-MODEL DATABASE WRITE ====================
     def write_all_models_to_milvus(self):
@@ -299,8 +250,9 @@ class VectorDatabaseBenchmark:
                 print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["milvus_write"] = results
+        self._save_checkpoint("milvus_write")
         return results
-    
+
     def write_all_models_to_qdrant(self):
         """Tüm modeller için Qdrant'a yaz"""
         print("\n" + "="*70)
@@ -348,6 +300,7 @@ class VectorDatabaseBenchmark:
                 print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["qdrant_write"] = results
+        self._save_checkpoint("qdrant_write")
         return results
     
     def write_all_models_to_chromadb(self):
@@ -396,8 +349,9 @@ class VectorDatabaseBenchmark:
                 print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["chromadb_write"] = results
+        self._save_checkpoint("chromadb_write")
         return results
-    
+
     def write_all_models_to_lancedb(self):
         """Tüm modeller için LanceDB'ye yaz"""
         print("\n" + "="*70)
@@ -439,8 +393,9 @@ class VectorDatabaseBenchmark:
                 print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["lancedb_write"] = results
+        self._save_checkpoint("lancedb_write")
         return results
-    
+
     def write_all_models_to_weaviate(self):
         """Tüm modeller için Weaviate'a yaz"""
         print("\n" + "="*70)
@@ -494,182 +449,173 @@ class VectorDatabaseBenchmark:
                 results[model_key] = {"status": "error", "error": str(e)}
                 print(f"   Hata: {e}")
         
+        try:
+            client.close()
+        except:
+            pass
+
         self.results["multi_model_benchmark"]["weaviate_write"] = results
+        self._save_checkpoint("weaviate_write")
         return results
-    
+
     # ==================== MULTI-MODEL SEARCH BENCHMARK ====================
     def benchmark_all_models_milvus_search(self):
-        """Tüm modeller için Milvus arama benchmark - Çoklu algoritma"""
-        print("\n" + "="*70)
+        """Tum modeller icin Milvus arama benchmark — HNSW parametreleri"""
+        print("\n" + "=" * 70)
         print(" TUM MODELLER ICIN MILVUS ARAMA BENCHMARK")
-        print("="*70)
-        
+        print("=" * 70)
+
         results = {}
-        
+
         for model_key, query_vectors in self.all_query_vectors.items():
             if not query_vectors:
                 continue
-            
+
             collection_name = f"docs_{model_key}"
             db_path = os.path.join(self.db_base_path, f"milvus/{model_key}_db.db")
-            
+
             print(f"\n {model_key}...")
-            
+
             try:
                 client = MilvusClient(db_path)
                 model_results = {}
-                
-                # 1. Default HNSW Search
+
+                # 1. Default HNSW Search (limit=10)
                 def hnsw_search():
                     return [client.search(collection_name=collection_name, data=[qv], limit=10, output_fields=["text"]) for qv in query_vectors]
-                
+
                 perf = self._measure_search_time(hnsw_search)
                 if "error" not in perf:
-                    model_results["HNSW_default"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   : HNSW_default: {perf['avg_time']*1000:.2f}ms")
-                
-                # 2. Farklı limit değerleri
+                    model_results["HNSW_default"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                    print(f"   HNSW_default: {perf['avg_time']*1000:.2f}ms")
+
+                # 2. Farkli limit degerleri
                 for limit in [5, 20, 50, 100]:
                     def limit_search(l=limit):
                         return [client.search(collection_name=collection_name, data=[qv], limit=l, output_fields=["text"]) for qv in query_vectors]
-                    
+
                     perf = self._measure_search_time(limit_search)
                     if "error" not in perf:
-                        model_results[f"HNSW_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   : HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
-                
-                # 3. Batch search (tüm sorguları tek seferde)
+                        model_results[f"HNSW_limit{limit}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                        print(f"   HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
+
+                # 3. Batch search (tum sorgulari tek seferde)
                 def batch_search():
                     return client.search(collection_name=collection_name, data=query_vectors, limit=10, output_fields=["text"])
-                
+
                 perf = self._measure_search_time(batch_search)
                 if "error" not in perf:
-                    model_results["HNSW_batch"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   : HNSW_batch: {perf['avg_time']*1000:.2f}ms")
-                
-                # 4. Farklı nprobe değerleri (search params)
-                for nprobe in [1, 8, 16, 32]:
-                    def nprobe_search(np=nprobe):
+                    model_results["HNSW_batch"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                    print(f"   HNSW_batch: {perf['avg_time']*1000:.2f}ms")
+
+                # 4. HNSW ef degerlerini test et (HNSW icin gecerli parametre)
+                for ef in [16, 64, 128, 256]:
+                    def ef_search(ef_val=ef):
                         return [client.search(
-                            collection_name=collection_name, 
-                            data=[qv], 
-                            limit=10, 
+                            collection_name=collection_name, data=[qv], limit=10,
                             output_fields=["text"],
-                            search_params={"nprobe": np}
+                            search_params={"metric_type": "COSINE", "params": {"ef": ef_val}}
                         ) for qv in query_vectors]
-                    
-                    perf = self._measure_search_time(nprobe_search)
+
+                    perf = self._measure_search_time(ef_search)
                     if "error" not in perf:
-                        model_results[f"HNSW_nprobe{nprobe}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   : HNSW_nprobe{nprobe}: {perf['avg_time']*1000:.2f}ms")
-                
+                        model_results[f"HNSW_ef{ef}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                        print(f"   HNSW_ef{ef}: {perf['avg_time']*1000:.2f}ms")
+
                 results[model_key] = model_results
-                    
+
             except Exception as e:
                 results[model_key] = {"error": str(e)}
                 print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["milvus_search"] = results
+        self._save_checkpoint("milvus_search")
         return results
-    
+
     def benchmark_all_models_qdrant_search(self):
-        """Tüm modeller için Qdrant arama benchmark - Çoklu algoritma"""
-        print("\n" + "="*70)
+        """Tum modeller icin Qdrant arama benchmark — HNSW + exact"""
+        print("\n" + "=" * 70)
         print(" TUM MODELLER ICIN QDRANT ARAMA BENCHMARK")
-        print("="*70)
-        
+        print("=" * 70)
+
         results = {}
-        
+
         try:
             client = QdrantClient(host="localhost", port=6333, timeout=60)
         except Exception as e:
             print(f" Qdrant baglanti hatasi: {e}")
             return {"error": str(e)}
-        
+
         for model_key, query_vectors in self.all_query_vectors.items():
             if not query_vectors:
                 continue
-            
+
+            # Qdrant Python list bekler
+            query_vectors = [qv.tolist() if hasattr(qv, 'tolist') else list(qv) for qv in query_vectors]
+
             collection_name = f"docs_{model_key}"
             print(f"\n {model_key}...")
-            
+
             try:
                 model_results = {}
-                
+
                 # 1. Default HNSW Search
                 def hnsw_search():
                     return [client.query_points(collection_name=collection_name, query=qv, limit=10, with_payload=True) for qv in query_vectors]
-                
+
                 perf = self._measure_search_time(hnsw_search)
                 if "error" not in perf:
-                    model_results["HNSW_default"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   : HNSW_default: {perf['avg_time']*1000:.2f}ms")
-                
-                # 2. Exact Search (brute force)
+                    model_results["HNSW_default"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                    print(f"   HNSW_default: {perf['avg_time']*1000:.2f}ms")
+
+                # 2. Exact Search (brute force karsilastirma)
                 def exact_search():
                     return [client.query_points(collection_name=collection_name, query=qv, limit=10, with_payload=True, search_params=SearchParams(exact=True)) for qv in query_vectors]
-                
+
                 perf = self._measure_search_time(exact_search)
                 if "error" not in perf:
-                    model_results["EXACT_bruteforce"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   : EXACT_bruteforce: {perf['avg_time']*1000:.2f}ms")
-                
-                # 3. HNSW with different ef values
-                for ef in [8, 16, 32, 64, 128, 256]:
+                    model_results["EXACT_bruteforce"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                    print(f"   EXACT_bruteforce: {perf['avg_time']*1000:.2f}ms")
+
+                # 3. HNSW ef degerleri (recall vs speed tradeoff)
+                for ef in [16, 32, 64, 128, 256]:
                     def ef_search(ef_val=ef):
                         return [client.query_points(collection_name=collection_name, query=qv, limit=10, with_payload=True, search_params=SearchParams(hnsw_ef=ef_val)) for qv in query_vectors]
-                    
+
                     perf = self._measure_search_time(ef_search)
                     if "error" not in perf:
-                        model_results[f"HNSW_ef{ef}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   : HNSW_ef{ef}: {perf['avg_time']*1000:.2f}ms")
-                
-                # 4. Farklı limit değerleri
+                        model_results[f"HNSW_ef{ef}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                        print(f"   HNSW_ef{ef}: {perf['avg_time']*1000:.2f}ms")
+
+                # 4. Farkli limit degerleri
                 for limit in [5, 20, 50, 100]:
                     def limit_search(l=limit):
                         return [client.query_points(collection_name=collection_name, query=qv, limit=l, with_payload=True) for qv in query_vectors]
-                    
+
                     perf = self._measure_search_time(limit_search)
                     if "error" not in perf:
-                        model_results[f"HNSW_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   : HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
-                
-                # 5. Quantization enabled search (if available)
-                try:
-                    def quantized_search():
-                        return [client.query_points(
-                            collection_name=collection_name, 
-                            query=qv, 
-                            limit=10, 
-                            with_payload=True,
-                            search_params=SearchParams(quantization={"ignore": False, "rescore": True})
-                        ) for qv in query_vectors]
-                    
-                    perf = self._measure_search_time(quantized_search)
-                    if "error" not in perf:
-                        model_results["HNSW_quantized"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   : HNSW_quantized: {perf['avg_time']*1000:.2f}ms")
-                except:
-                    pass
-                
-                # 6. Payload ile ve payload'sız arama karşılaştırması
+                        model_results[f"HNSW_limit{limit}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                        print(f"   HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
+
+                # 5. Payload vs no-payload karsilastirmasi
                 def no_payload_search():
                     return [client.query_points(collection_name=collection_name, query=qv, limit=10, with_payload=False) for qv in query_vectors]
-                
+
                 perf = self._measure_search_time(no_payload_search)
                 if "error" not in perf:
-                    model_results["HNSW_no_payload"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   : HNSW_no_payload: {perf['avg_time']*1000:.2f}ms")
-                
+                    model_results["HNSW_no_payload"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                    print(f"   HNSW_no_payload: {perf['avg_time']*1000:.2f}ms")
+
                 results[model_key] = model_results
-                
+
             except Exception as e:
                 results[model_key] = {"error": str(e)}
                 print(f"   Hata: {e}")
-        
+
         self.results["multi_model_benchmark"]["qdrant_search"] = results
+        self._save_checkpoint("qdrant_search")
         return results
-    
+
     def benchmark_all_models_chromadb_search(self):
         """Tüm modeller için ChromaDB arama benchmark - Çoklu algoritma"""
         print("\n" + "="*70)
@@ -699,7 +645,7 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(vector_search)
                 if "error" not in perf:
-                    model_results["HNSW_vector"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["HNSW_vector"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : HNSW_vector: {perf['avg_time']*1000:.2f}ms")
                 
                 # 2. Farklı n_results değerleri
@@ -709,18 +655,18 @@ class VectorDatabaseBenchmark:
                     
                     perf = self._measure_search_time(n_search)
                     if "error" not in perf:
-                        model_results[f"HNSW_n{n}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                        model_results[f"HNSW_n{n}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                         print(f"   : HNSW_n{n}: {perf['avg_time']*1000:.2f}ms")
                 
-                # 3. Text query search (eğer embedding_function varsa)
+                # 3. Text query search (embedding encode + arama suresi dahil — adil karsilastirma DEGIL)
                 def text_search():
                     return [collection.query(query_texts=[q], n_results=10) for q in self.test_queries]
-                
+
                 try:
                     perf = self._measure_search_time(text_search)
                     if "error" not in perf:
-                        model_results["TEXT_search"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                        print(f"   : TEXT_search: {perf['avg_time']*1000:.2f}ms")
+                        model_results["TEXT_search_includes_encode"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                        print(f"   TEXT_search_includes_encode: {perf['avg_time']*1000:.2f}ms")
                 except:
                     pass
                 
@@ -730,7 +676,7 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(minimal_search)
                 if "error" not in perf:
-                    model_results["HNSW_minimal"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["HNSW_minimal"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : HNSW_minimal: {perf['avg_time']*1000:.2f}ms")
                 
                 def full_search():
@@ -738,7 +684,7 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(full_search)
                 if "error" not in perf:
-                    model_results["HNSW_full"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["HNSW_full"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : HNSW_full: {perf['avg_time']*1000:.2f}ms")
                 
                 # 5. Batch query
@@ -747,7 +693,7 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(batch_search)
                 if "error" not in perf:
-                    model_results["HNSW_batch"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["HNSW_batch"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : HNSW_batch: {perf['avg_time']*1000:.2f}ms")
                 
                 results[model_key] = model_results
@@ -757,8 +703,9 @@ class VectorDatabaseBenchmark:
                 print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["chromadb_search"] = results
+        self._save_checkpoint("chromadb_search")
         return results
-    
+
     def benchmark_all_models_lancedb_search(self):
         """Tüm modeller için LanceDB arama benchmark - Çoklu algoritma"""
         print("\n" + "="*70)
@@ -788,7 +735,7 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(vector_search)
                 if "error" not in perf:
-                    model_results["VECTOR_default"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["VECTOR_default"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : VECTOR_default: {perf['avg_time']*1000:.2f}ms")
                 
                 # 2. Farklı limit değerleri
@@ -798,7 +745,7 @@ class VectorDatabaseBenchmark:
                     
                     perf = self._measure_search_time(limit_search)
                     if "error" not in perf:
-                        model_results[f"VECTOR_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                        model_results[f"VECTOR_limit{limit}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                         print(f"   : VECTOR_limit{limit}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 3. Select specific columns
@@ -807,35 +754,20 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(select_search)
                 if "error" not in perf:
-                    model_results["VECTOR_select_text"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["VECTOR_select_text"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : VECTOR_select_text: {perf['avg_time']*1000:.2f}ms")
                 
-                # 4. Cosine metric (default)
-                def cosine_search():
-                    return [table.search(qv).metric("cosine").limit(10).to_pandas() for qv in query_vectors]
-                
-                perf = self._measure_search_time(cosine_search)
-                if "error" not in perf:
-                    model_results["VECTOR_cosine"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   : VECTOR_cosine: {perf['avg_time']*1000:.2f}ms")
-                
-                # 5. L2 (Euclidean) metric
-                def l2_search():
-                    return [table.search(qv).metric("L2").limit(10).to_pandas() for qv in query_vectors]
-                
-                perf = self._measure_search_time(l2_search)
-                if "error" not in perf:
-                    model_results["VECTOR_L2"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   : VECTOR_L2: {perf['avg_time']*1000:.2f}ms")
-                
-                # 6. Dot product metric
-                def dot_search():
-                    return [table.search(qv).metric("dot").limit(10).to_pandas() for qv in query_vectors]
-                
-                perf = self._measure_search_time(dot_search)
-                if "error" not in perf:
-                    model_results["VECTOR_dot"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
-                    print(f"   : VECTOR_dot: {perf['avg_time']*1000:.2f}ms")
+                # 4-6. Metric karsilastirmasi (cosine/L2/dot)
+                # NOT: LanceDB'de metric degistirmek runtime rerank yapar, index yeniden olusturmaz.
+                # Bu sonuclar metric hesaplama ek yukunu olcer, index farkini degil.
+                for metric_name in ["cosine", "L2", "dot"]:
+                    def metric_search(m=metric_name):
+                        return [table.search(qv).metric(m).limit(10).to_pandas() for qv in query_vectors]
+
+                    perf = self._measure_search_time(metric_search)
+                    if "error" not in perf:
+                        model_results[f"VECTOR_{metric_name}_rerank"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
+                        print(f"   VECTOR_{metric_name}_rerank: {perf['avg_time']*1000:.2f}ms")
                 
                 # 7. nprobes değerleri (IVF için)
                 for nprobes in [1, 8, 20, 50]:
@@ -845,7 +777,7 @@ class VectorDatabaseBenchmark:
                     try:
                         perf = self._measure_search_time(nprobes_search)
                         if "error" not in perf:
-                            model_results[f"VECTOR_nprobes{nprobes}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                            model_results[f"VECTOR_nprobes{nprobes}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                             print(f"   : VECTOR_nprobes{nprobes}: {perf['avg_time']*1000:.2f}ms")
                     except:
                         pass
@@ -858,7 +790,7 @@ class VectorDatabaseBenchmark:
                     try:
                         perf = self._measure_search_time(refine_search)
                         if "error" not in perf:
-                            model_results[f"VECTOR_refine{refine}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                            model_results[f"VECTOR_refine{refine}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                             print(f"   : VECTOR_refine{refine}: {perf['avg_time']*1000:.2f}ms")
                     except:
                         pass
@@ -870,8 +802,9 @@ class VectorDatabaseBenchmark:
                 print(f"   Hata: {e}")
         
         self.results["multi_model_benchmark"]["lancedb_search"] = results
+        self._save_checkpoint("lancedb_search")
         return results
-    
+
     def benchmark_all_models_weaviate_search(self):
         """Tüm modeller için Weaviate arama benchmark - Çoklu algoritma"""
         print("\n" + "="*70)
@@ -903,7 +836,7 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(near_vector_search)
                 if "error" not in perf:
-                    model_results["HNSW_near_vector"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["HNSW_near_vector"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : HNSW_near_vector: {perf['avg_time']*1000:.2f}ms")
                 
                 # 2. Farklı limit değerleri
@@ -913,7 +846,7 @@ class VectorDatabaseBenchmark:
                     
                     perf = self._measure_search_time(limit_search)
                     if "error" not in perf:
-                        model_results[f"HNSW_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                        model_results[f"HNSW_limit{limit}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                         print(f"   : HNSW_limit{limit}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 3. BM25 Search (keyword-based)
@@ -922,7 +855,7 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(bm25_search)
                 if "error" not in perf:
-                    model_results["BM25"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["BM25"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : BM25: {perf['avg_time']*1000:.2f}ms")
                 
                 # 4. Hybrid Search - farklı alpha değerleri
@@ -932,7 +865,7 @@ class VectorDatabaseBenchmark:
                     
                     perf = self._measure_search_time(hybrid_search)
                     if "error" not in perf:
-                        model_results[f"HYBRID_alpha{alpha}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                        model_results[f"HYBRID_alpha{alpha}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                         print(f"   : HYBRID_alpha{alpha}: {perf['avg_time']*1000:.2f}ms")
                 
                 # 5. Near vector with certainty threshold
@@ -943,7 +876,7 @@ class VectorDatabaseBenchmark:
                     try:
                         perf = self._measure_search_time(certainty_search)
                         if "error" not in perf:
-                            model_results[f"HNSW_certainty{certainty}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                            model_results[f"HNSW_certainty{certainty}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                             print(f"   : HNSW_certainty{certainty}: {perf['avg_time']*1000:.2f}ms")
                     except:
                         pass
@@ -956,7 +889,7 @@ class VectorDatabaseBenchmark:
                     try:
                         perf = self._measure_search_time(distance_search)
                         if "error" not in perf:
-                            model_results[f"HNSW_distance{distance}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                            model_results[f"HNSW_distance{distance}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                             print(f"   : HNSW_distance{distance}: {perf['avg_time']*1000:.2f}ms")
                     except:
                         pass
@@ -967,7 +900,7 @@ class VectorDatabaseBenchmark:
                 
                 perf = self._measure_search_time(fetch_search)
                 if "error" not in perf:
-                    model_results["FETCH_baseline"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                    model_results["FETCH_baseline"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                     print(f"   : FETCH_baseline: {perf['avg_time']*1000:.2f}ms")
                 
                 # 8. BM25 with different limits
@@ -977,7 +910,7 @@ class VectorDatabaseBenchmark:
                     
                     perf = self._measure_search_time(bm25_limit_search)
                     if "error" not in perf:
-                        model_results[f"BM25_limit{limit}"] = {"performance": perf, "qps": len(self.test_queries) / perf["avg_time"]}
+                        model_results[f"BM25_limit{limit}"] = {"performance": perf, "sequential_throughput": len(self.test_queries) / perf["avg_time"]}
                         print(f"   : BM25_limit{limit}: {perf['avg_time']*1000:.2f}ms")
                 
                 results[model_key] = model_results
@@ -986,17 +919,25 @@ class VectorDatabaseBenchmark:
                 results[model_key] = {"error": str(e)}
                 print(f"   Hata: {e}")
         
+        try:
+            client.close()
+        except:
+            pass
+
         self.results["multi_model_benchmark"]["weaviate_search"] = results
+        self._save_checkpoint("weaviate_search")
         return results
-    
-    def _measure_search_time(self, search_func, warmup_runs=2, test_runs=5) -> Dict:
-        """Arama süresini ölç"""
-        for _ in range(warmup_runs):
+
+    def _measure_search_time(self, search_func, warmup_runs=3, test_runs=30) -> Dict:
+        """Arama suresini olc — akademik standart: 3 warmup + 30 test run"""
+        # Warmup: cache/JIT isitma — hata olursa erken cik
+        for i in range(warmup_runs):
             try:
                 search_func()
-            except:
-                pass
-        
+            except Exception as e:
+                print(f"   [WARMUP HATA] {type(e).__name__}: {e}")
+                return {"error": str(e)}
+
         times = []
         for _ in range(test_runs):
             start = time.time()
@@ -1004,85 +945,65 @@ class VectorDatabaseBenchmark:
                 search_func()
                 times.append(time.time() - start)
             except Exception as e:
+                print(f"   [SEARCH HATA] {type(e).__name__}: {e}")
                 return {"error": str(e)}
-        
+
         return {
-            "avg_time": np.mean(times),
-            "min_time": np.min(times),
-            "max_time": np.max(times),
-            "std_time": np.std(times),
-            "p50_time": np.percentile(times, 50),
-            "p95_time": np.percentile(times, 95),
-            "p99_time": np.percentile(times, 99)
+            "avg_time": float(np.mean(times)),
+            "min_time": float(np.min(times)),
+            "max_time": float(np.max(times)),
+            "std_time": float(np.std(times)),
+            "p50_time": float(np.percentile(times, 50)),
+            "p95_time": float(np.percentile(times, 95)),
+            "p99_time": float(np.percentile(times, 99))
         }
     
-    # ==================== MODEL VERİLERİNİ YÜKLE ====================
+    # ==================== VERİLERİ YÜKLE ====================
     def load_models_data(self) -> bool:
-        """Models klasöründeki verileri yükle"""
-        print("\n" + "="*70)
-        print(" VERILER YUKLENIYOR")
-        print("="*70)
-        
-        if not os.path.exists(self.models_path):
-            print(f" Models klasoru bulunamadi: {self.models_path}")
+        """CUSTOM_DATASET klasorundeki tum verileri yukle (329 PDF → ~52K chunk)"""
+        print("\n" + "=" * 70)
+        print(" CUSTOM_DATASET YUKLENIYOR")
+        print("=" * 70)
+
+        metin_path = os.path.join(self.custom_dataset_path, "metin_dosyasi.json")
+        if not os.path.exists(metin_path):
+            print(f" HATA: {metin_path} bulunamadi!")
+            print("   Benchmark icin gercek veri gereklidir.")
             return False
-        
-        json_files = glob.glob(os.path.join(self.models_path, "*.json"))
-        txt_files = glob.glob(os.path.join(self.models_path, "*.txt"))
-        
+
         documents = []
-        
-        for json_file in json_files:
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        for item in data:
-                            if isinstance(item, dict):
-                                text = item.get('text', item.get('content', str(item)))
-                                documents.append({"text": text, "source": os.path.basename(json_file)})
-                            else:
-                                documents.append({"text": str(item), "source": os.path.basename(json_file)})
-                    elif isinstance(data, dict):
-                        text = data.get('text', data.get('content', str(data)))
-                        documents.append({"text": text, "source": os.path.basename(json_file)})
-            except:
-                pass
-        
-        for txt_file in txt_files:
-            try:
-                with open(txt_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    chunks = [content[i:i+500] for i in range(0, len(content), 500)]
-                    for chunk in chunks:
-                        if chunk.strip():
-                            documents.append({"text": chunk.strip(), "source": os.path.basename(txt_file)})
-            except:
-                pass
-        
+        print(f"\n metin_dosyasi.json yukleniyor...")
+        with open(metin_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        pdf_docs = data.get("documents", [])
+        chunk_size = 500
+        overlap = 50
+        step = chunk_size - overlap
+
+        for doc in pdf_docs:
+            text = doc.get("full_text", "").strip()
+            filename = doc.get("filename", "unknown")
+            if not text:
+                continue
+            for i in range(0, len(text), step):
+                chunk = text[i:i + chunk_size].strip()
+                if len(chunk) > 50:
+                    documents.append({
+                        "text": chunk,
+                        "source": filename,
+                        "type": "pdf_chunk"
+                    })
+
         if not documents:
-            documents = self._generate_sample_data()
-        
+            print(" HATA: PDF'lerden chunk oluturulamadi!")
+            return False
+
         self.documents = documents
-        print(f" Toplam {len(self.documents)} dokuman yuklendi")
+        print(f"   {len(pdf_docs)} PDF -> {len(documents)} chunk")
+        self.results["metadata"]["document_count"] = len(documents)
+        self.results["metadata"]["pdf_count"] = len(pdf_docs)
         return True
-    
-    def _generate_sample_data(self) -> List[Dict]:
-        """Örnek veri oluştur"""
-        sample_texts = [
-            "Artificial intelligence is transforming healthcare with advanced diagnostic tools.",
-            "Machine learning algorithms can predict patient outcomes with high accuracy.",
-            "Deep learning models are revolutionizing medical image analysis.",
-            "Natural language processing enables better understanding of clinical notes.",
-            "Computer vision systems can detect diseases from X-rays and MRI scans.",
-            "Reinforcement learning is being applied to optimize treatment plans.",
-            "Transformer models have achieved state-of-the-art results in NLP tasks.",
-            "Convolutional neural networks excel at image classification tasks.",
-            "Recurrent neural networks are effective for sequence modeling.",
-            "Generative adversarial networks can create synthetic medical images."
-        ] * 100  # 1000 doküman
-        
-        return [{"text": text, "source": "sample"} for text in sample_texts]
     
     # ==================== SONUÇLARI KAYDET ====================
     def save_comprehensive_results(self):
@@ -1090,13 +1011,23 @@ class VectorDatabaseBenchmark:
         output_dir = self.base_path
         excel_file = os.path.join(output_dir, "multi_model_benchmark_results.xlsx")
         json_file = os.path.join(output_dir, "multi_model_benchmark_results.json")
-        
-        # JSON kaydet
+
+        # JSON kaydet (her zaman önce — Excel çöksede JSON kurtarılmış olur)
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, indent=2, ensure_ascii=False, default=str)
         print(f"\n JSON: {json_file}")
-        
-        # Excel oluştur
+
+        # Excel oluştur (hata olursa loglayıp devam et)
+        try:
+            self._build_excel(excel_file)
+        except Exception as e:
+            print(f"\n [EXCEL HATA] Excel olusturulamadi: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            print(" JSON basariyla kaydedildi, Excel atlandi.")
+
+    def _build_excel(self, excel_file: str):
+        """Excel dosyasini olustur"""
         wb = openpyxl.Workbook()
         header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
         header_font = Font(bold=True, color="FFFFFF")
@@ -1216,12 +1147,12 @@ class VectorDatabaseBenchmark:
                                 "p50_ms": perf.get("p50_time", 0) * 1000,
                                 "p95_ms": perf.get("p95_time", 0) * 1000,
                                 "p99_ms": perf.get("p99_time", 0) * 1000,
-                                "qps": algo_data.get("qps", 0)
+                                "sequential_throughput": algo_data.get("sequential_throughput", 0)
                             })
         
         all_results.sort(key=lambda x: x["avg_ms"])
         
-        headers = ["Sira", "Veritabani", "Model", "Algoritma", "Ort (ms)", "Min (ms)", "Max (ms)", "Std (ms)", "P95 (ms)", "QPS"]
+        headers = ["Sira", "Veritabani", "Model", "Algoritma", "Ort (ms)", "Min (ms)", "Max (ms)", "Std (ms)", "P95 (ms)", "Seq Throughput"]
         row = 3
         for col, h in enumerate(headers, 1):
             cell = ws_all_search.cell(row=row, column=col, value=h)
@@ -1242,7 +1173,7 @@ class VectorDatabaseBenchmark:
             ws_all_search.cell(row=row, column=7, value=round(r["max_ms"], 4)).border = border
             ws_all_search.cell(row=row, column=8, value=round(r["std_ms"], 4)).border = border
             ws_all_search.cell(row=row, column=9, value=round(r["p95_ms"], 4)).border = border
-            ws_all_search.cell(row=row, column=10, value=round(r["qps"], 2)).border = border
+            ws_all_search.cell(row=row, column=10, value=round(r["sequential_throughput"], 2)).border = border
             
             for col in range(1, 11):
                 cell = ws_all_search.cell(row=row, column=col)
@@ -1282,7 +1213,7 @@ class VectorDatabaseBenchmark:
                     ws_db[f'A{row}'].fill = green_fill
                     row += 1
                     
-                    headers = ["Algoritma", "Ort (ms)", "Min (ms)", "Max (ms)", "Std (ms)", "P50 (ms)", "P95 (ms)", "QPS"]
+                    headers = ["Algoritma", "Ort (ms)", "Min (ms)", "Max (ms)", "Std (ms)", "P50 (ms)", "P95 (ms)", "Seq Throughput"]
                     for col, h in enumerate(headers, 1):
                         cell = ws_db.cell(row=row, column=col, value=h)
                         cell.fill = header_fill
@@ -1307,7 +1238,7 @@ class VectorDatabaseBenchmark:
                         ws_db.cell(row=row, column=5, value=round(perf.get("std_time", 0)*1000, 4)).border = border
                         ws_db.cell(row=row, column=6, value=round(perf.get("p50_time", 0)*1000, 4)).border = border
                         ws_db.cell(row=row, column=7, value=round(perf.get("p95_time", 0)*1000, 4)).border = border
-                        ws_db.cell(row=row, column=8, value=round(algo_data.get("qps", 0), 2)).border = border
+                        ws_db.cell(row=row, column=8, value=round(algo_data.get("sequential_throughput", 0), 2)).border = border
                         for col in range(1, 9):
                             ws_db.cell(row=row, column=col).alignment = center
                         row += 1
@@ -1331,7 +1262,7 @@ class VectorDatabaseBenchmark:
             if model not in model_best or r["avg_ms"] < model_best[model]["avg_ms"]:
                 model_best[model] = r
         
-        headers = ["Model", "En Iyi DB", "En Iyi Algoritma", "Sure (ms)", "QPS", "Toplam Test"]
+        headers = ["Model", "En Iyi DB", "En Iyi Algoritma", "Sure (ms)", "Seq Throughput", "Toplam Test"]
         row = 3
         for col, h in enumerate(headers, 1):
             cell = ws_model.cell(row=row, column=col, value=h)
@@ -1347,7 +1278,7 @@ class VectorDatabaseBenchmark:
             ws_model.cell(row=row, column=2, value=best["database"]).border = border
             ws_model.cell(row=row, column=3, value=best["algorithm"]).border = border
             ws_model.cell(row=row, column=4, value=round(best["avg_ms"], 4)).border = border
-            ws_model.cell(row=row, column=5, value=round(best["qps"], 2)).border = border
+            ws_model.cell(row=row, column=5, value=round(best["sequential_throughput"], 2)).border = border
             ws_model.cell(row=row, column=6, value=test_count).border = border
             for col in range(1, 7):
                 ws_model.cell(row=row, column=col).alignment = center
@@ -1371,8 +1302,7 @@ class VectorDatabaseBenchmark:
             "Hybrid": ["HYBRID"],
             "Exact/Brute Force": ["EXACT", "bruteforce"],
             "Metric Varyasyonlari": ["cosine", "L2", "dot"],
-            "Quantization": ["quantized"],
-            "Parametre Testi": ["ef", "nprobe", "refine", "nprobes"]
+            "Parametre Testi": ["ef", "refine", "nprobes", "certainty", "distance"]
         }
         
         headers = ["Kategori", "Test Sayisi", "Ort Sure (ms)", "Min Sure (ms)", "En Iyi Kombinasyon"]
@@ -1421,7 +1351,7 @@ class VectorDatabaseBenchmark:
         ws_db_compare['A1'].font = Font(bold=True, size=14)
         ws_db_compare['A1'].alignment = center
         
-        headers = ["Veritabani", "Toplam Test", "Ort Sure (ms)", "Min Sure (ms)", "Max Sure (ms)", "Ort QPS", "En Iyi Algoritma"]
+        headers = ["Veritabani", "Toplam Test", "Ort Sure (ms)", "Min Sure (ms)", "Max Sure (ms)", "Ort Seq Throughput", "En Iyi Algoritma"]
         row = 3
         for col, h in enumerate(headers, 1):
             cell = ws_db_compare.cell(row=row, column=col, value=h)
@@ -1445,7 +1375,7 @@ class VectorDatabaseBenchmark:
             avg_time = np.mean([r["avg_ms"] for r in results])
             min_time = min([r["avg_ms"] for r in results])
             max_time = max([r["avg_ms"] for r in results])
-            avg_qps = np.mean([r["qps"] for r in results])
+            avg_seq_tp = np.mean([r["sequential_throughput"] for r in results])
             best_algo = stats["best"]["algorithm"]
             
             ws_db_compare.cell(row=row, column=1, value=db).border = border
@@ -1453,7 +1383,7 @@ class VectorDatabaseBenchmark:
             ws_db_compare.cell(row=row, column=3, value=round(avg_time, 4)).border = border
             ws_db_compare.cell(row=row, column=4, value=round(min_time, 4)).border = border
             ws_db_compare.cell(row=row, column=5, value=round(max_time, 4)).border = border
-            ws_db_compare.cell(row=row, column=6, value=round(avg_qps, 2)).border = border
+            ws_db_compare.cell(row=row, column=6, value=round(avg_seq_tp, 2)).border = border
             ws_db_compare.cell(row=row, column=7, value=best_algo).border = border
             for col in range(1, 8):
                 ws_db_compare.cell(row=row, column=col).alignment = center
@@ -1509,58 +1439,83 @@ class VectorDatabaseBenchmark:
                                     model,
                                     algo,
                                     algo_data["performance"]["avg_time"] * 1000,
-                                    algo_data.get("qps", 0)
+                                    algo_data.get("sequential_throughput", 0)
                                 ))
         
         all_results.sort(key=lambda x: x[3])
         
-        for i, (db, model, algo, time_ms, qps) in enumerate(all_results, 1):
+        for i, (db, model, algo, time_ms, seq_tp) in enumerate(all_results, 1):
             emoji = "1." if i == 1 else "2." if i == 2 else "3." if i == 3 else f"{i:2}."
-            print(f"  {emoji} {db:<10} | {model:<22} | {algo:<20} | {time_ms:8.2f}ms | QPS: {qps:8.0f}")
+            print(f"  {emoji} {db:<10} | {model:<22} | {algo:<20} | {time_ms:8.2f}ms | Seq TP: {seq_tp:8.0f}")
         
         print(f"\n Toplam {len(all_results)} arama testi yapildi.")
     
+    def _run_step(self, step_key: str, func):
+        """Adımı çalıştır — daha önce tamamlandıysa atla"""
+        if self._is_step_done(step_key):
+            print(f"\n [ATLANDI] {step_key} zaten tamamlanmis")
+            return
+        func()
+
     def run_full_multi_model_benchmark(self):
         """Tüm modeller ve veritabanları için kapsamlı benchmark"""
         print("\n" + "*"*40)
         print("    KAPSAMLI MULTI-MODEL BENCHMARK BASLIYOR")
         print("*"*40)
         print(f"\n Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
+
+        # Hangi adımlar kaldı?
+        all_steps = [
+            'milvus_write', 'qdrant_write', 'chromadb_write', 'lancedb_write', 'weaviate_write',
+            'milvus_search', 'qdrant_search', 'chromadb_search', 'lancedb_search', 'weaviate_search'
+        ]
+        done = [s for s in all_steps if self._is_step_done(s)]
+        remaining = [s for s in all_steps if not self._is_step_done(s)]
+
+        if done:
+            print(f"\n Tamamlanan: {', '.join(done)}")
+        if remaining:
+            print(f" Kalan: {', '.join(remaining)}")
+        else:
+            print("\n Tum adimlar zaten tamamlanmis!")
+            self.print_comprehensive_summary()
+            self.save_comprehensive_results()
+            return
+
         # 1. Verileri yükle
         if not self.load_models_data():
             print(" Veri yukleme basarisiz!")
             return
-        
+
         # 2. Tüm modeller için embedding hesapla
         self.prepare_all_embeddings()
-        
+
         # 3. Tüm veritabanlarına yaz
         print("\n" + "="*70)
         print(" TUM MODELLER ICIN YAZMA BASLIYOR")
         print("="*70)
-        
-        self.write_all_models_to_milvus()
-        self.write_all_models_to_qdrant()
-        self.write_all_models_to_chromadb()
-        self.write_all_models_to_lancedb()
-        self.write_all_models_to_weaviate()
-        
+
+        self._run_step("milvus_write",   self.write_all_models_to_milvus)
+        self._run_step("qdrant_write",   self.write_all_models_to_qdrant)
+        self._run_step("chromadb_write", self.write_all_models_to_chromadb)
+        self._run_step("lancedb_write",  self.write_all_models_to_lancedb)
+        self._run_step("weaviate_write", self.write_all_models_to_weaviate)
+
         # 4. Tüm veritabanlarında arama benchmark
         print("\n" + "="*70)
         print(" TUM MODELLER ICIN ARAMA BENCHMARK BASLIYOR")
         print("="*70)
-        
-        self.benchmark_all_models_milvus_search()
-        self.benchmark_all_models_qdrant_search()
-        self.benchmark_all_models_chromadb_search()
-        self.benchmark_all_models_lancedb_search()
-        self.benchmark_all_models_weaviate_search()
-        
+
+        self._run_step("milvus_search",   self.benchmark_all_models_milvus_search)
+        self._run_step("qdrant_search",   self.benchmark_all_models_qdrant_search)
+        self._run_step("chromadb_search", self.benchmark_all_models_chromadb_search)
+        self._run_step("lancedb_search",  self.benchmark_all_models_lancedb_search)
+        self._run_step("weaviate_search", self.benchmark_all_models_weaviate_search)
+
         # 5. Sonuçları kaydet
         self.print_comprehensive_summary()
         self.save_comprehensive_results()
-        
+
         print("\n" + "*"*40)
         print("    KAPSAMLI BENCHMARK TAMAMLANDI!")
         print("*"*40)
