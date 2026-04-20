@@ -3,7 +3,16 @@
     "allow": [
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('write_vector_database.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\('model_type','?'\\), d.get\\('architectures',['?']\\)\\)\" echo \"---\" cat \"/home/ugo/Documents/Python/bitirememe projesi/models/qwen_lora/config.json\")",
-      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\('model_type','?'\\), d.get\\('architectures',['?']\\)\\)\")"
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\('model_type','?'\\), d.get\\('architectures',['?']\\)\\)\")",
+      "Bash(python3 -c ':*)",
+      "Bash(python3)",
+      "Bash(python3 -c ' *)",
+      "Bash(xxd)",
+      "Bash(python3 -c \"import sentence_transformers; print\\(sentence_transformers.__version__\\)\")",
+      "Bash(python3 -c \"import peft; print\\('peft:', peft.__version__\\)\")"
+    ],
+    "additionalDirectories": [
+      "/home/ugo/.claude/projects/-home-ugo-Documents-Python-bitirememe-projesi"
     ]
   }
 }
