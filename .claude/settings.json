@@ -9,7 +9,10 @@
       "Bash(python3 -c ' *)",
       "Bash(xxd)",
       "Bash(python3 -c \"import sentence_transformers; print\\(sentence_transformers.__version__\\)\")",
-      "Bash(python3 -c \"import peft; print\\('peft:', peft.__version__\\)\")"
+      "Bash(python3 -c \"import peft; print\\('peft:', peft.__version__\\)\")",
+      "Bash(git pull *)",
+      "Bash(git stash *)",
+      "Bash(git push *)"
     ],
     "additionalDirectories": [
       "/home/ugo/.claude/projects/-home-ugo-Documents-Python-bitirememe-projesi"
