@@ -50,3 +50,6 @@ test_uı/
 
 /.claude./
 /.vscode/
+logs/
+embeddings_cache/
+.worker_result_*.json

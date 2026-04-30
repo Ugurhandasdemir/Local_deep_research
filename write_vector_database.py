@@ -1,56 +1,155 @@
 """
-Vektor Veritabani Benchmark Scripti
-------------------------------------
-Amac: 4 adet local embedding modelini (bge_squad, e5_base, e5_small, mpnet_multi)
-      5 farkli vektor veritabaninda (Milvus, Qdrant, Chroma, LanceDB, Weaviate)
-      test etmek.
+Vektor Veritabani Benchmark — Orchestrator + Worker subprocess
+----------------------------------------------------------------
+Amac: 4GB VRAM + sinirli RAM ortaminda 20+ embedding modelini 5 vektor
+veritabaninda guvenli sekilde benchmark etmek.
 
-Sistem: 4GB VRAM. Bu yuzden modeller tek tek GPU'ya alinir,
-        is bitince bellekten silinir.
+Tasarim:
+  - Her (model, db) kombinasyonu AYRI subprocess'te calisir.
+  - Subprocess cikinca tum RAM/VRAM tamamen serbest.
+  - WRITE_BATCH=32 — chromadb/lancedb OOM riskini dusurur.
+  - Embeddingler bir kez encode edilip embeddings_cache/*.npy'a yazilir;
+    sonraki write/search worker'lari .npy'dan okur (yeniden encode YOK).
+  - Her test sonucu hemen JSON + Excel'e yazilir.
+  - Resume: yarida kalip yeniden baslatildiginda biten testler atlanir.
+  - ASAMA 3 — BULMA BASARIMI: SQuAD korpusu uzerinde nDCG@10, Recall@10/100,
+    MRR@10, Hit@1/10 (BEIR-style). Yapilan testler JSON kontrolu ile atlanir.
 
 Kullanim:
-    python write_vector_database.py --mode test    # 20 belge ile hizli test
-    python write_vector_database.py --mode full    # butun belgelerle tam benchmark
+    python write_vector_database.py --mode test              # 20 belge
+    python write_vector_database.py --mode full              # tum belgeler
+    python write_vector_database.py --mode test --reset      # cache+sonuc sifirla
+
+(Worker bayragi otomatik, manuel cagirmaya gerek yok)
 """
 
 import os
 import gc
+import sys
 import json
 import time
 import shutil
 import argparse
 import warnings
+import logging
+import threading
+import subprocess
 from datetime import datetime
 
 import numpy as np
-import torch
-from sentence_transformers import SentenceTransformer
 
-# Veritabani kutuphaneleri
-import lancedb
-import chromadb
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, SearchParams
-from pymilvus import MilvusClient
-import weaviate
-from weaviate.classes.config import Property, DataType, Configure
 
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+# ---------------------------------------------------------------
+# LOGGING
+# ---------------------------------------------------------------
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logger = logging.getLogger("benchmark")
+
+
+def setup_logging(role):
+    log_file = os.path.join(LOG_DIR, f"benchmark_{role}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setFormatter(fmt)
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(fmt)
+    logger.addHandler(fh)
+    logger.addHandler(sh)
+    return log_file
+
+
+class _PrintToLogger:
+    """print() -> logger. Mevcut print cagrilari log dosyasina dussun."""
+    def __init__(self, level=logging.INFO):
+        self.level = level
+        self._buf = ""
+    def write(self, msg):
+        self._buf += msg
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                logger.log(self.level, line.rstrip())
+    def flush(self):
+        if self._buf.strip():
+            logger.log(self.level, self._buf.rstrip())
+        self._buf = ""
+    def isatty(self): return False
+    def fileno(self): raise OSError("no fileno")
+    def writable(self): return True
+    def readable(self): return False
+    def seekable(self): return False
+    @property
+    def encoding(self): return "utf-8"
+    @property
+    def closed(self): return False
+
+
+def _heartbeat(interval=30):
+    try:
+        import torch
+    except Exception:
+        torch = None
+    last_wall = time.time()
+    last_mono = time.monotonic()
+    while True:
+        time.sleep(interval)
+        now_wall = time.time()
+        now_mono = time.monotonic()
+        wall_gap = now_wall - last_wall
+        mono_gap = now_mono - last_mono
+        drift = wall_gap - mono_gap
+        try:
+            mem_used = torch.cuda.memory_allocated() / 1e9 if (torch and torch.cuda.is_available()) else 0
+        except Exception:
+            mem_used = 0
+        if drift > interval * 1.5:
+            logger.warning(
+                f"HEARTBEAT — SUSPEND TESPIT EDILDI: {drift:.0f}s atlama "
+                f"(wall={wall_gap:.0f}s mono={mono_gap:.0f}s)"
+            )
+        else:
+            logger.info(f"HEARTBEAT alive vram={mem_used:.2f}GB")
+        last_wall = now_wall
+        last_mono = now_mono
+
+
+def _inhibit_suspend():
+    try:
+        p = subprocess.Popen(
+            [
+                "systemd-inhibit",
+                "--what=sleep:idle:handle-lid-switch",
+                "--who=vektor-benchmark",
+                "--why=Benchmark calisiyor",
+                "--mode=block",
+                "sleep", "infinity",
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        logger.info(f"systemd-inhibit aktif (pid={p.pid}) — suspend/lid kapali")
+        return p
+    except FileNotFoundError:
+        logger.warning("systemd-inhibit bulunamadi — suspend engellenemedi")
+        return None
+
 
 warnings.filterwarnings("ignore")
 
 
 # ---------------------------------------------------------------
-# Ayarlar
+# AYARLAR
 # ---------------------------------------------------------------
 BASE_DIR = "/home/ugo/Documents/Python/bitirememe projesi"
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 DB_DIR = os.path.join(BASE_DIR, "DB")
 DATA_FILE = os.path.join(BASE_DIR, "CUSTOM_DATASET", "metin_dosyasi.json")
+CACHE_DIR = os.path.join(BASE_DIR, "embeddings_cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Tum embedding modelleri — hepsi 4GB VRAM'e rahatlikla sigar.
-# "path" HuggingFace ismi (online indirir) veya local klasor olabilir; ikisi de calisir.
 MODELS = {
     # --- LOCAL fine-tuned modeller ---
     "e5_small":           {"path": os.path.join(MODELS_DIR, "e5_small", "model"),    "dim": 384},
@@ -61,17 +160,16 @@ MODELS = {
     "snowflake_arctic_l": {"path": os.path.join(MODELS_DIR, "snowflake-arctic-embed-l-v2.0"), "dim": 1024},
     "all_mini_l6":        {"path": os.path.join(MODELS_DIR, "all_mini_l6_v2"),         "dim": 384},
 
-    # --- Fine-tuned modellerin EGITILMEMIS (base) HuggingFace versiyonlari ---
-    # Karsilastirma: bu modeller yukarıdaki local fine-tuned surumlerin baz modelleridir.
-    "e5_small_base":          {"path": "intfloat/multilingual-e5-small",                   "dim": 384},   # e5_small icin base
-    "mpnet_multi_base":       {"path": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", "dim": 768},  # mpnet_multi icin base
-    "e5_base_base":           {"path": "intfloat/multilingual-e5-base",                    "dim": 768},   # e5_base icin base
-    "bge_squad_base":         {"path": "BAAI/bge-large-en-v1.5",                           "dim": 1024},  # bge_squad icin base
-    "qwen_lora_base":         {"path": "Qwen/Qwen3-Embedding-0.6B",                        "dim": 1024},  # qwen_lora icin base
-    "snowflake_arctic_l_base": {"path": "Snowflake/snowflake-arctic-embed-l-v2.0",         "dim": 1024},  # snowflake_arctic_l icin base
-    "all_mini_l6_base":       {"path": "sentence-transformers/all-MiniLM-L6-v2",           "dim": 384},   # all_mini_l6 icin base
+    # --- Base (egitilmemis) HuggingFace versiyonlari ---
+    "e5_small_base":          {"path": "intfloat/multilingual-e5-small",                   "dim": 384},
+    "mpnet_multi_base":       {"path": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", "dim": 768},
+    "e5_base_base":           {"path": "intfloat/multilingual-e5-base",                    "dim": 768},
+    "bge_squad_base":         {"path": "BAAI/bge-large-en-v1.5",                           "dim": 1024},
+    "qwen_lora_base":         {"path": "Qwen/Qwen3-Embedding-0.6B",                        "dim": 1024},
+    "snowflake_arctic_l_base": {"path": "Snowflake/snowflake-arctic-embed-l-v2.0",         "dim": 1024},
+    "all_mini_l6_base":       {"path": "sentence-transformers/all-MiniLM-L6-v2",           "dim": 384},
 
-    # --- Diger HuggingFace hazir modeller (ilk calistirmada indirilir, sonra cache'lenir) ---
+    # --- Diger HuggingFace hazir modeller ---
     "minilm_l12":         {"path": "sentence-transformers/all-MiniLM-L12-v2",                     "dim": 384},
     "mpnet_base":         {"path": "sentence-transformers/all-mpnet-base-v2",                     "dim": 768},
     "distilroberta":      {"path": "sentence-transformers/all-distilroberta-v1",                  "dim": 768},
@@ -86,6 +184,8 @@ MODELS = {
     "e5_base_hf":         {"path": "intfloat/e5-base-v2",                                         "dim": 768},
 }
 
+DBS = ["milvus", "qdrant", "chromadb", "lancedb", "weaviate"]
+
 TEST_QUERIES = [
     "artificial intelligence healthcare applications",
     "machine learning medical diagnosis systems",
@@ -99,24 +199,33 @@ TEST_QUERIES = [
     "generative adversarial networks image synthesis",
 ]
 
-# Arama benchmark ayarlari — tek yerden duzenlenebilsin diye
 WARMUP_RUNS = 2
-TEST_RUNS = 10     # Her arama icin 10 kez calistir, ortalama al
-BATCH_SIZE = 32    # 4GB VRAM icin orta boy batch
+TEST_RUNS = 10
+ENCODE_BATCH = 32
+WRITE_BATCH = 32   # chromadb/lancedb OOM riskini dusurmek icin kucuk
+
+# --- BULMA BASARIMI (akademik / BEIR-style retrieval quality) ---
+SQUAD_FILE = os.path.join(BASE_DIR, "CUSTOM_DATASET", "squad_dataset.json")
+QUALITY_QUERY_SAMPLE = 1000     # akademik raporlar icin yeterli ornek
+QUALITY_TOP_K = 100             # max retrieve, sonra @1/@10/@100 hesapla
+QUALITY_SAMPLE_SEED = 42
 
 OUTPUT_JSON = os.path.join(BASE_DIR, "multi_model_benchmark_results.json")
 OUTPUT_XLSX = os.path.join(BASE_DIR, "multi_model_benchmark_results.xlsx")
 
 
 # ---------------------------------------------------------------
-# Yardimci fonksiyonlar
+# Yardimcilar
 # ---------------------------------------------------------------
 def free_memory():
-    """GPU + RAM bellegini temizle"""
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except Exception:
+        pass
 
 
 def print_header(title):
@@ -126,21 +235,15 @@ def print_header(title):
 
 
 def load_documents(limit=None):
-    """CUSTOM_DATASET'teki pdf metinlerini yukle, 500 karakterlik chunklara bol."""
-    print_header("BELGELER YUKLENIYOR")
-
     if not os.path.exists(DATA_FILE):
         raise FileNotFoundError(f"Veri dosyasi bulunamadi: {DATA_FILE}")
-
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-
     pdf_docs = data.get("documents", [])
     chunks = []
     chunk_size = 500
     overlap = 50
     step = chunk_size - overlap
-
     for doc in pdf_docs:
         text = doc.get("full_text", "").strip()
         filename = doc.get("filename", "unknown")
@@ -150,24 +253,17 @@ def load_documents(limit=None):
             chunk = text[i:i + chunk_size].strip()
             if len(chunk) > 50:
                 chunks.append({"text": chunk, "source": filename})
-
     if limit is not None:
         chunks = chunks[:limit]
-        print(f"  TEST modu: ilk {limit} chunk kullanilacak")
-
-    print(f"  {len(pdf_docs)} PDF -> {len(chunks)} chunk")
     return chunks
 
 
 def measure_time(func):
-    """Bir arama fonksiyonunu warmup + test kez calistirip istatistik dondur."""
-    # Once warmup — cache/JIT isinsin
     for _ in range(WARMUP_RUNS):
         try:
             func()
         except Exception as e:
             return {"error": str(e)}
-
     times = []
     for _ in range(TEST_RUNS):
         t0 = time.time()
@@ -176,7 +272,6 @@ def measure_time(func):
         except Exception as e:
             return {"error": str(e)}
         times.append(time.time() - t0)
-
     return {
         "avg_time": float(np.mean(times)),
         "min_time": float(np.min(times)),
@@ -187,53 +282,132 @@ def measure_time(func):
     }
 
 
+def cache_paths(model_key, mode):
+    return {
+        "docs": os.path.join(CACHE_DIR, f"{model_key}_{mode}_docs.npy"),
+        "queries": os.path.join(CACHE_DIR, f"{model_key}_{mode}_queries.npy"),
+        "meta": os.path.join(CACHE_DIR, f"{model_key}_{mode}_meta.json"),
+    }
+
+
+def encoding_cached(model_key, mode):
+    cp = cache_paths(model_key, mode)
+    return all(os.path.exists(cp[k]) for k in ("docs", "queries", "meta"))
+
+
 # ---------------------------------------------------------------
-# Embedding hesaplama (tek model, 4GB VRAM icin)
+# BULMA BASARIMI — SQuAD korpus + qrels + cache
 # ---------------------------------------------------------------
-def encode_model(model_path, texts, queries):
+def load_squad_quality():
     """
-    Bir modeli yukle, belgeleri ve sorgulari encode et, modeli sil.
-    4GB VRAM'e tek bir model sigar, bu yuzden her model sonrasi bellekten atilir.
+    SQuAD JSON -> (corpus, queries, qrels)
+      corpus : [{"id": int, "text": str, "title": str}]
+      queries: [{"id": str, "text": str}]   (deterministik subset)
+      qrels  : {qid: [doc_id, ...]}
     """
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"  Model yukleniyor: {model_path}  (device={device})")
+    if not os.path.exists(SQUAD_FILE):
+        raise FileNotFoundError(f"SQuAD bulunamadi: {SQUAD_FILE}")
+    with open(SQUAD_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-    model = SentenceTransformer(model_path, device=device)
+    corpus = []
+    ctx_to_id = {}
+    all_queries = []
+    all_qrels = {}
+    for article in data.get("data", []):
+        title = article.get("title", "")
+        for para in article.get("paragraphs", []):
+            ctx = (para.get("context") or "").strip()
+            if not ctx:
+                continue
+            if ctx not in ctx_to_id:
+                cid = len(corpus)
+                ctx_to_id[ctx] = cid
+                corpus.append({"id": cid, "text": ctx, "title": title})
+            cid = ctx_to_id[ctx]
+            for qa in para.get("qas", []):
+                if qa.get("is_impossible", False):
+                    continue
+                q = (qa.get("question") or "").strip()
+                qid = qa.get("id") or ""
+                if not q or not qid:
+                    continue
+                all_queries.append({"id": qid, "text": q})
+                all_qrels.setdefault(qid, set()).add(cid)
 
-    print(f"  {len(texts)} belge encode ediliyor...")
-    doc_embs = model.encode(
-        texts,
-        show_progress_bar=True,
-        batch_size=BATCH_SIZE,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
+    import random
+    rng = random.Random(QUALITY_SAMPLE_SEED)
+    if len(all_queries) > QUALITY_QUERY_SAMPLE:
+        all_queries = rng.sample(all_queries, QUALITY_QUERY_SAMPLE)
+    qrels = {q["id"]: sorted(all_qrels[q["id"]]) for q in all_queries}
+    return corpus, all_queries, qrels
 
-    query_embs = model.encode(
-        queries,
-        show_progress_bar=False,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
 
-    # Bellegi hemen bosalt — siradaki model icin
-    del model
-    free_memory()
+def qual_cache_paths(model_key):
+    return {
+        "corpus":  os.path.join(CACHE_DIR, f"{model_key}_qual_corpus.npy"),
+        "queries": os.path.join(CACHE_DIR, f"{model_key}_qual_queries.npy"),
+        "meta":    os.path.join(CACHE_DIR, f"{model_key}_qual_meta.json"),
+    }
 
-    return doc_embs.tolist(), query_embs.tolist()
+
+def qual_encoding_cached(model_key):
+    qp = qual_cache_paths(model_key)
+    return all(os.path.exists(qp[k]) for k in ("corpus", "queries", "meta"))
+
+
+def compute_quality_metrics(retrieved_ids_list, gt_list, ks=(1, 10, 100)):
+    """
+    BEIR-style metrik. Tek qrels (binary relevance) varsayimi.
+      retrieved_ids_list: list per-query of top-k doc id (int)
+      gt_list           : list per-query of relevant doc id list
+    """
+    import math
+    n = len(retrieved_ids_list)
+    if n == 0:
+        return {}
+    out = {}
+    for k in ks:
+        hits = 0.0
+        recalls = 0.0
+        ndcgs = 0.0
+        for retrieved, gt in zip(retrieved_ids_list, gt_list):
+            top = retrieved[:k]
+            gt_set = set(gt)
+            if not gt_set:
+                continue
+            n_rel = len(gt_set)
+            if any(d in gt_set for d in top):
+                hits += 1.0
+            recalls += sum(1 for d in top if d in gt_set) / n_rel
+            dcg = sum(1.0 / math.log2(i + 2) for i, d in enumerate(top) if d in gt_set)
+            idcg = sum(1.0 / math.log2(i + 2) for i in range(min(k, n_rel)))
+            if idcg > 0:
+                ndcgs += dcg / idcg
+        out[f"hit@{k}"]    = hits / n
+        out[f"recall@{k}"] = recalls / n
+        out[f"ndcg@{k}"]   = ndcgs / n
+    mrr = 0.0
+    for retrieved, gt in zip(retrieved_ids_list, gt_list):
+        gt_set = set(gt)
+        for i, d in enumerate(retrieved[:10]):
+            if d in gt_set:
+                mrr += 1.0 / (i + 1)
+                break
+    out["mrr@10"] = mrr / n
+    return out
 
 
 # ---------------------------------------------------------------
-# VERITABANINA YAZMA — her fonksiyon 1 modelin embeddinglerini yazar
+# WRITE — her DB icin bir fonksiyon (worker icinde calisir)
 # ---------------------------------------------------------------
 def write_to_milvus(model_key, docs, embeddings):
+    from pymilvus import MilvusClient
     collection = f"docs_{model_key}"
     db_path = os.path.join(DB_DIR, "milvus", f"{model_key}_db.db")
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
     if os.path.exists(db_path):
         os.remove(db_path)
-
     client = MilvusClient(db_path)
     t0 = time.time()
     client.create_collection(
@@ -241,88 +415,96 @@ def write_to_milvus(model_key, docs, embeddings):
         dimension=len(embeddings[0]),
         metric_type="COSINE",
     )
-    data = [
-        {"id": i, "vector": emb, "text": d["text"][:500], "source": d["source"]}
-        for i, (d, emb) in enumerate(zip(docs, embeddings))
-    ]
-    for i in range(0, len(data), 100):
-        client.insert(collection_name=collection, data=data[i:i + 100])
+    for i in range(0, len(docs), WRITE_BATCH):
+        j = min(i + WRITE_BATCH, len(docs))
+        chunk = [
+            {"id": k, "vector": embeddings[k], "text": docs[k]["text"][:500], "source": docs[k]["source"]}
+            for k in range(i, j)
+        ]
+        client.insert(collection_name=collection, data=chunk)
     return time.time() - t0
 
 
 def write_to_qdrant(model_key, docs, embeddings):
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, VectorParams, PointStruct
     client = QdrantClient(host="localhost", port=6333, timeout=120)
     collection = f"docs_{model_key}"
-
     try:
         client.delete_collection(collection)
     except Exception:
         pass
-
     t0 = time.time()
     client.create_collection(
         collection_name=collection,
         vectors_config=VectorParams(size=len(embeddings[0]), distance=Distance.COSINE),
     )
-    points = [
-        PointStruct(id=i, vector=emb, payload={"text": d["text"], "source": d["source"]})
-        for i, (d, emb) in enumerate(zip(docs, embeddings))
-    ]
-    for i in range(0, len(points), 100):
-        client.upsert(collection_name=collection, points=points[i:i + 100])
+    for i in range(0, len(docs), WRITE_BATCH):
+        j = min(i + WRITE_BATCH, len(docs))
+        points = [
+            PointStruct(id=k, vector=embeddings[k], payload={"text": docs[k]["text"], "source": docs[k]["source"]})
+            for k in range(i, j)
+        ]
+        client.upsert(collection_name=collection, points=points)
     return time.time() - t0
 
 
 def write_to_chromadb(model_key, docs, embeddings):
+    import chromadb
     collection = f"docs_{model_key}"
     db_path = os.path.join(DB_DIR, "chromadb", f"{model_key}_db")
-
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
     os.makedirs(db_path, exist_ok=True)
-
     client = chromadb.PersistentClient(path=db_path)
     t0 = time.time()
     col = client.create_collection(name=collection, metadata={"hnsw:space": "cosine"})
-
-    ids = [str(i) for i in range(len(docs))]
-    texts = [d["text"] for d in docs]
-    metas = [{"source": d["source"]} for d in docs]
-
-    for i in range(0, len(docs), 100):
-        j = min(i + 100, len(docs))
-        col.add(ids=ids[i:j], embeddings=embeddings[i:j], documents=texts[i:j], metadatas=metas[i:j])
+    for i in range(0, len(docs), WRITE_BATCH):
+        j = min(i + WRITE_BATCH, len(docs))
+        col.add(
+            ids=[str(k) for k in range(i, j)],
+            embeddings=embeddings[i:j],
+            documents=[docs[k]["text"] for k in range(i, j)],
+            metadatas=[{"source": docs[k]["source"]} for k in range(i, j)],
+        )
     return time.time() - t0
 
 
 def write_to_lancedb(model_key, docs, embeddings):
+    import lancedb
     table = f"docs_{model_key}"
     db_path = os.path.join(DB_DIR, "lancedb", f"{model_key}_db")
-
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
     os.makedirs(db_path, exist_ok=True)
-
     db = lancedb.connect(db_path)
     t0 = time.time()
-    data = [
-        {"id": i, "vector": emb, "text": d["text"], "source": d["source"]}
-        for i, (d, emb) in enumerate(zip(docs, embeddings))
+    end_first = min(WRITE_BATCH, len(docs))
+    first = [
+        {"id": k, "vector": embeddings[k], "text": docs[k]["text"], "source": docs[k]["source"]}
+        for k in range(0, end_first)
     ]
-    db.create_table(table, data=data)
+    tbl = db.create_table(table, data=first)
+    for i in range(WRITE_BATCH, len(docs), WRITE_BATCH):
+        j = min(i + WRITE_BATCH, len(docs))
+        chunk = [
+            {"id": k, "vector": embeddings[k], "text": docs[k]["text"], "source": docs[k]["source"]}
+            for k in range(i, j)
+        ]
+        tbl.add(chunk)
     return time.time() - t0
 
 
 def write_to_weaviate(model_key, docs, embeddings):
+    import weaviate
+    from weaviate.classes.config import Property, DataType, Configure
     client = weaviate.connect_to_local()
     try:
-        # Weaviate sinif ismi: harfle baslamali, alt cizgi ve sayi olabilir
         collection_name = f"Docs_{model_key}"
         try:
             client.collections.delete(collection_name)
         except Exception:
             pass
-
         t0 = time.time()
         col = client.collections.create(
             name=collection_name,
@@ -343,43 +525,192 @@ def write_to_weaviate(model_key, docs, embeddings):
         client.close()
 
 
+WRITE_FUNCS = {
+    "milvus":   write_to_milvus,
+    "qdrant":   write_to_qdrant,
+    "chromadb": write_to_chromadb,
+    "lancedb":  write_to_lancedb,
+    "weaviate": write_to_weaviate,
+}
+
+
 # ---------------------------------------------------------------
-# ARAMA BENCHMARK — her DB kendi algoritmalariyla test edilir
+# QUALITY WRITE — SQuAD korpusu icin ayri koleksiyon
+# ---------------------------------------------------------------
+def qual_write_milvus(model_key, corpus, embeddings):
+    from pymilvus import MilvusClient
+    collection = f"docs_qual_{model_key}"
+    db_path = os.path.join(DB_DIR, "milvus", f"{model_key}_qual_db.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    client = MilvusClient(db_path)
+    t0 = time.time()
+    client.create_collection(
+        collection_name=collection,
+        dimension=len(embeddings[0]),
+        metric_type="COSINE",
+    )
+    for i in range(0, len(corpus), WRITE_BATCH):
+        j = min(i + WRITE_BATCH, len(corpus))
+        chunk = [
+            {"id": int(corpus[k]["id"]),
+             "vector": embeddings[k],
+             "text": corpus[k]["text"][:500],
+             "title": corpus[k].get("title", "")}
+            for k in range(i, j)
+        ]
+        client.insert(collection_name=collection, data=chunk)
+    return time.time() - t0
+
+
+def qual_write_qdrant(model_key, corpus, embeddings):
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, VectorParams, PointStruct
+    client = QdrantClient(host="localhost", port=6333, timeout=120)
+    collection = f"docs_qual_{model_key}"
+    try:
+        client.delete_collection(collection)
+    except Exception:
+        pass
+    t0 = time.time()
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=VectorParams(size=len(embeddings[0]), distance=Distance.COSINE),
+    )
+    for i in range(0, len(corpus), WRITE_BATCH):
+        j = min(i + WRITE_BATCH, len(corpus))
+        points = [
+            PointStruct(id=int(corpus[k]["id"]), vector=embeddings[k],
+                        payload={"text": corpus[k]["text"], "title": corpus[k].get("title", "")})
+            for k in range(i, j)
+        ]
+        client.upsert(collection_name=collection, points=points)
+    return time.time() - t0
+
+
+def qual_write_chromadb(model_key, corpus, embeddings):
+    import chromadb
+    collection = f"docs_qual_{model_key}"
+    db_path = os.path.join(DB_DIR, "chromadb", f"{model_key}_qual_db")
+    if os.path.exists(db_path):
+        shutil.rmtree(db_path)
+    os.makedirs(db_path, exist_ok=True)
+    client = chromadb.PersistentClient(path=db_path)
+    t0 = time.time()
+    col = client.create_collection(name=collection, metadata={"hnsw:space": "cosine"})
+    for i in range(0, len(corpus), WRITE_BATCH):
+        j = min(i + WRITE_BATCH, len(corpus))
+        col.add(
+            ids=[str(corpus[k]["id"]) for k in range(i, j)],
+            embeddings=embeddings[i:j],
+            documents=[corpus[k]["text"] for k in range(i, j)],
+            metadatas=[{"title": corpus[k].get("title", "")} for k in range(i, j)],
+        )
+    return time.time() - t0
+
+
+def qual_write_lancedb(model_key, corpus, embeddings):
+    import lancedb
+    table = f"docs_qual_{model_key}"
+    db_path = os.path.join(DB_DIR, "lancedb", f"{model_key}_qual_db")
+    if os.path.exists(db_path):
+        shutil.rmtree(db_path)
+    os.makedirs(db_path, exist_ok=True)
+    db = lancedb.connect(db_path)
+    t0 = time.time()
+    end_first = min(WRITE_BATCH, len(corpus))
+    first = [
+        {"id": int(corpus[k]["id"]), "vector": embeddings[k],
+         "text": corpus[k]["text"], "title": corpus[k].get("title", "")}
+        for k in range(0, end_first)
+    ]
+    tbl = db.create_table(table, data=first)
+    for i in range(WRITE_BATCH, len(corpus), WRITE_BATCH):
+        j = min(i + WRITE_BATCH, len(corpus))
+        chunk = [
+            {"id": int(corpus[k]["id"]), "vector": embeddings[k],
+             "text": corpus[k]["text"], "title": corpus[k].get("title", "")}
+            for k in range(i, j)
+        ]
+        tbl.add(chunk)
+    return time.time() - t0
+
+
+def qual_write_weaviate(model_key, corpus, embeddings):
+    import weaviate
+    from weaviate.classes.config import Property, DataType, Configure
+    client = weaviate.connect_to_local()
+    try:
+        collection_name = f"DocsQual_{model_key}"
+        try:
+            client.collections.delete(collection_name)
+        except Exception:
+            pass
+        t0 = time.time()
+        col = client.collections.create(
+            name=collection_name,
+            vectorizer_config=Configure.Vectorizer.none(),
+            properties=[
+                Property(name="text", data_type=DataType.TEXT),
+                Property(name="title", data_type=DataType.TEXT),
+                Property(name="doc_id", data_type=DataType.INT),
+            ],
+        )
+        with col.batch.dynamic() as batch:
+            for c, emb in zip(corpus, embeddings):
+                batch.add_object(
+                    properties={"text": c["text"], "title": c.get("title", ""),
+                                "doc_id": int(c["id"])},
+                    vector=emb,
+                )
+        return time.time() - t0
+    finally:
+        client.close()
+
+
+QUAL_WRITE_FUNCS = {
+    "milvus":   qual_write_milvus,
+    "qdrant":   qual_write_qdrant,
+    "chromadb": qual_write_chromadb,
+    "lancedb":  qual_write_lancedb,
+    "weaviate": qual_write_weaviate,
+}
+
+
+# ---------------------------------------------------------------
+# SEARCH — her DB icin bir fonksiyon
 # ---------------------------------------------------------------
 def search_milvus(model_key, query_vectors):
+    from pymilvus import MilvusClient
     collection = f"docs_{model_key}"
     db_path = os.path.join(DB_DIR, "milvus", f"{model_key}_db.db")
     client = MilvusClient(db_path)
     results = {}
 
-    # 1) Default HNSW
     def default_search():
         return [client.search(collection_name=collection, data=[q], limit=10, output_fields=["text"])
                 for q in query_vectors]
     r = measure_time(default_search)
-    if "error" not in r:
-        results["HNSW_default"] = r
+    if "error" not in r: results["HNSW_default"] = r
 
-    # 2) Farkli limit degerleri
     for limit in [5, 20, 50]:
         def fn(lim=limit):
             return [client.search(collection_name=collection, data=[q], limit=lim, output_fields=["text"])
                     for q in query_vectors]
         r = measure_time(fn)
-        if "error" not in r:
-            results[f"HNSW_limit{limit}"] = r
+        if "error" not in r: results[f"HNSW_limit{limit}"] = r
 
-    # 3) Batch arama — tum sorgular tek seferde
     def batch():
         return client.search(collection_name=collection, data=query_vectors, limit=10, output_fields=["text"])
     r = measure_time(batch)
-    if "error" not in r:
-        results["HNSW_batch"] = r
-
+    if "error" not in r: results["HNSW_batch"] = r
     return results
 
 
 def search_qdrant(model_key, query_vectors):
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import SearchParams
     client = QdrantClient(host="localhost", port=6333, timeout=60)
     collection = f"docs_{model_key}"
     results = {}
@@ -387,32 +718,27 @@ def search_qdrant(model_key, query_vectors):
     def default_search():
         return [client.query_points(collection_name=collection, query=q, limit=10) for q in query_vectors]
     r = measure_time(default_search)
-    if "error" not in r:
-        results["HNSW_default"] = r
+    if "error" not in r: results["HNSW_default"] = r
 
-    # Exact (brute force) — FLAT eşdegeri
     def exact():
         return [client.query_points(collection_name=collection, query=q, limit=10,
                                     search_params=SearchParams(exact=True))
                 for q in query_vectors]
     r = measure_time(exact)
-    if "error" not in r:
-        results["EXACT"] = r
+    if "error" not in r: results["EXACT"] = r
 
-    # HNSW ef degerleri — recall/hiz dengesi
     for ef in [32, 128, 256]:
         def fn(e=ef):
             return [client.query_points(collection_name=collection, query=q, limit=10,
                                         search_params=SearchParams(hnsw_ef=e))
                     for q in query_vectors]
         r = measure_time(fn)
-        if "error" not in r:
-            results[f"HNSW_ef{ef}"] = r
-
+        if "error" not in r: results[f"HNSW_ef{ef}"] = r
     return results
 
 
 def search_chromadb(model_key, query_vectors):
+    import chromadb
     collection = f"docs_{model_key}"
     db_path = os.path.join(DB_DIR, "chromadb", f"{model_key}_db")
     client = chromadb.PersistentClient(path=db_path)
@@ -422,28 +748,23 @@ def search_chromadb(model_key, query_vectors):
     def default_search():
         return [col.query(query_embeddings=[q], n_results=10) for q in query_vectors]
     r = measure_time(default_search)
-    if "error" not in r:
-        results["HNSW_default"] = r
+    if "error" not in r: results["HNSW_default"] = r
 
-    # Farkli n_results
     for n in [5, 20, 50]:
         def fn(nn=n):
             return [col.query(query_embeddings=[q], n_results=nn) for q in query_vectors]
         r = measure_time(fn)
-        if "error" not in r:
-            results[f"HNSW_n{n}"] = r
+        if "error" not in r: results[f"HNSW_n{n}"] = r
 
-    # Batch
     def batch():
         return col.query(query_embeddings=query_vectors, n_results=10)
     r = measure_time(batch)
-    if "error" not in r:
-        results["HNSW_batch"] = r
-
+    if "error" not in r: results["HNSW_batch"] = r
     return results
 
 
 def search_lancedb(model_key, query_vectors):
+    import lancedb
     table_name = f"docs_{model_key}"
     db_path = os.path.join(DB_DIR, "lancedb", f"{model_key}_db")
     db = lancedb.connect(db_path)
@@ -453,28 +774,24 @@ def search_lancedb(model_key, query_vectors):
     def default_search():
         return [table.search(q).limit(10).to_pandas() for q in query_vectors]
     r = measure_time(default_search)
-    if "error" not in r:
-        results["VECTOR_default"] = r
+    if "error" not in r: results["VECTOR_default"] = r
 
     for limit in [5, 20, 50]:
         def fn(lim=limit):
             return [table.search(q).limit(lim).to_pandas() for q in query_vectors]
         r = measure_time(fn)
-        if "error" not in r:
-            results[f"VECTOR_limit{limit}"] = r
+        if "error" not in r: results[f"VECTOR_limit{limit}"] = r
 
-    # Metric karsilastirmasi
     for metric in ["cosine", "L2"]:
         def fn(m=metric):
             return [table.search(q).metric(m).limit(10).to_pandas() for q in query_vectors]
         r = measure_time(fn)
-        if "error" not in r:
-            results[f"VECTOR_{metric}"] = r
-
+        if "error" not in r: results[f"VECTOR_{metric}"] = r
     return results
 
 
 def search_weaviate(model_key, query_vectors):
+    import weaviate
     client = weaviate.connect_to_local()
     try:
         col = client.collections.get(f"Docs_{model_key}")
@@ -483,54 +800,553 @@ def search_weaviate(model_key, query_vectors):
         def default_search():
             return [col.query.near_vector(near_vector=q, limit=10) for q in query_vectors]
         r = measure_time(default_search)
-        if "error" not in r:
-            results["HNSW_default"] = r
+        if "error" not in r: results["HNSW_default"] = r
 
         for limit in [5, 20, 50]:
             def fn(lim=limit):
                 return [col.query.near_vector(near_vector=q, limit=lim) for q in query_vectors]
             r = measure_time(fn)
-            if "error" not in r:
-                results[f"HNSW_limit{limit}"] = r
+            if "error" not in r: results[f"HNSW_limit{limit}"] = r
 
-        # BM25 keyword search
         def bm25():
             return [col.query.bm25(query=qt, limit=10) for qt in TEST_QUERIES]
         r = measure_time(bm25)
-        if "error" not in r:
-            results["BM25"] = r
+        if "error" not in r: results["BM25"] = r
 
-        # Hybrid (vektor + BM25)
         for alpha in [0.25, 0.5, 0.75]:
             def fn(a=alpha):
                 return [col.query.hybrid(query=qt, vector=q, limit=10, alpha=a)
                         for qt, q in zip(TEST_QUERIES, query_vectors)]
             r = measure_time(fn)
-            if "error" not in r:
-                results[f"HYBRID_alpha{alpha}"] = r
-
+            if "error" not in r: results[f"HYBRID_alpha{alpha}"] = r
         return results
     finally:
         client.close()
 
 
+SEARCH_FUNCS = {
+    "milvus":   search_milvus,
+    "qdrant":   search_qdrant,
+    "chromadb": search_chromadb,
+    "lancedb":  search_lancedb,
+    "weaviate": search_weaviate,
+}
+
+
 # ---------------------------------------------------------------
-# Sonuclari Excel'e yaz
+# QUALITY SEARCH — top-K dondur (id), metrik orchestrator'da hesaplanir
 # ---------------------------------------------------------------
-def save_results(results):
-    # Once JSON (Excel coksede sonuc kurtarilsin)
+def qual_search_milvus(model_key, query_vectors, top_k=QUALITY_TOP_K):
+    from pymilvus import MilvusClient
+    collection = f"docs_qual_{model_key}"
+    db_path = os.path.join(DB_DIR, "milvus", f"{model_key}_qual_db.db")
+    client = MilvusClient(db_path)
+    out = []
+    for q in query_vectors:
+        res = client.search(collection_name=collection, data=[q], limit=top_k,
+                            output_fields=["title"])
+        ids = [int(hit["id"]) for hit in res[0]]
+        out.append(ids)
+    return out
+
+
+def qual_search_qdrant(model_key, query_vectors, top_k=QUALITY_TOP_K):
+    from qdrant_client import QdrantClient
+    client = QdrantClient(host="localhost", port=6333, timeout=120)
+    collection = f"docs_qual_{model_key}"
+    out = []
+    for q in query_vectors:
+        res = client.query_points(collection_name=collection, query=q, limit=top_k)
+        out.append([int(p.id) for p in res.points])
+    return out
+
+
+def qual_search_chromadb(model_key, query_vectors, top_k=QUALITY_TOP_K):
+    import chromadb
+    collection = f"docs_qual_{model_key}"
+    db_path = os.path.join(DB_DIR, "chromadb", f"{model_key}_qual_db")
+    client = chromadb.PersistentClient(path=db_path)
+    col = client.get_collection(collection)
+    out = []
+    for q in query_vectors:
+        res = col.query(query_embeddings=[q], n_results=top_k)
+        ids = [int(x) for x in res["ids"][0]]
+        out.append(ids)
+    return out
+
+
+def qual_search_lancedb(model_key, query_vectors, top_k=QUALITY_TOP_K):
+    import lancedb
+    table_name = f"docs_qual_{model_key}"
+    db_path = os.path.join(DB_DIR, "lancedb", f"{model_key}_qual_db")
+    db = lancedb.connect(db_path)
+    table = db.open_table(table_name)
+    out = []
+    for q in query_vectors:
+        df = table.search(q).limit(top_k).to_pandas()
+        out.append([int(x) for x in df["id"].tolist()])
+    return out
+
+
+def qual_search_weaviate(model_key, query_vectors, top_k=QUALITY_TOP_K):
+    import weaviate
+    client = weaviate.connect_to_local()
+    try:
+        col = client.collections.get(f"DocsQual_{model_key}")
+        out = []
+        for q in query_vectors:
+            res = col.query.near_vector(near_vector=q, limit=top_k,
+                                        return_properties=["doc_id"])
+            ids = [int(o.properties["doc_id"]) for o in res.objects]
+            out.append(ids)
+        return out
+    finally:
+        client.close()
+
+
+QUAL_SEARCH_FUNCS = {
+    "milvus":   qual_search_milvus,
+    "qdrant":   qual_search_qdrant,
+    "chromadb": qual_search_chromadb,
+    "lancedb":  qual_search_lancedb,
+    "weaviate": qual_search_weaviate,
+}
+
+
+# ---------------------------------------------------------------
+# WORKER (subprocess olarak calisir)
+# ---------------------------------------------------------------
+def worker_main(args):
+    role = f"worker_{args.phase}_{args.model}_{args.db or 'NA'}"
+    setup_logging(role)
+    sys.stdout = _PrintToLogger(logging.INFO)
+    sys.stderr = _PrintToLogger(logging.ERROR)
+    threading.Thread(target=_heartbeat, daemon=True).start()
+    logger.info(f"Worker basladi PID={os.getpid()} phase={args.phase} model={args.model} db={args.db} mode={args.mode}")
+
+    cp = cache_paths(args.model, args.mode)
+    result = {"status": "error", "error": "unknown"}
+    try:
+        if args.phase == "encode":
+            cfg = MODELS[args.model]
+            from sentence_transformers import SentenceTransformer
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Encode: {args.model} (device={device}) path={cfg['path']}")
+            docs = load_documents(limit=20 if args.mode == "test" else None)
+            texts = [d["text"] for d in docs]
+            model = SentenceTransformer(cfg["path"], device=device)
+            doc_embs = model.encode(texts, batch_size=ENCODE_BATCH, convert_to_numpy=True,
+                                    normalize_embeddings=True, show_progress_bar=True)
+            query_embs = model.encode(TEST_QUERIES, batch_size=ENCODE_BATCH, convert_to_numpy=True,
+                                      normalize_embeddings=True, show_progress_bar=False)
+            del model
+            free_memory()
+            np.save(cp["docs"], doc_embs)
+            np.save(cp["queries"], query_embs)
+            with open(cp["meta"], "w", encoding="utf-8") as f:
+                json.dump({
+                    "docs": docs,
+                    "dim": int(doc_embs.shape[1]),
+                    "doc_count": len(docs),
+                    "model": args.model,
+                    "mode": args.mode,
+                }, f, ensure_ascii=False)
+            result = {"status": "ok", "dim": int(doc_embs.shape[1]), "doc_count": len(docs)}
+
+        elif args.phase == "write":
+            embeddings = np.load(cp["docs"]).tolist()
+            with open(cp["meta"], "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            docs = meta["docs"]
+            fn = WRITE_FUNCS[args.db]
+            logger.info(f"Write -> {args.db} ({len(docs)} kayit)")
+            t = fn(args.model, docs, embeddings)
+            result = {"status": "ok", "time": t, "record_count": len(docs), "dim": meta["dim"]}
+
+        elif args.phase == "search":
+            query_vectors = np.load(cp["queries"]).tolist()
+            fn = SEARCH_FUNCS[args.db]
+            logger.info(f"Search -> {args.db}")
+            algos = fn(args.model, query_vectors)
+            result = {"status": "ok", "algorithms": algos}
+
+        elif args.phase == "encode_qual":
+            cfg = MODELS[args.model]
+            from sentence_transformers import SentenceTransformer
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"EncodeQual: {args.model} (device={device})")
+            corpus, queries, qrels = load_squad_quality()
+            corpus_texts = [c["text"] for c in corpus]
+            query_texts = [q["text"] for q in queries]
+            model = SentenceTransformer(cfg["path"], device=device)
+            corpus_embs = model.encode(corpus_texts, batch_size=ENCODE_BATCH,
+                                       convert_to_numpy=True, normalize_embeddings=True,
+                                       show_progress_bar=True)
+            query_embs = model.encode(query_texts, batch_size=ENCODE_BATCH,
+                                      convert_to_numpy=True, normalize_embeddings=True,
+                                      show_progress_bar=False)
+            del model
+            free_memory()
+            qp = qual_cache_paths(args.model)
+            np.save(qp["corpus"], corpus_embs)
+            np.save(qp["queries"], query_embs)
+            with open(qp["meta"], "w", encoding="utf-8") as f:
+                json.dump({
+                    "corpus": corpus,
+                    "queries": queries,
+                    "qrels": qrels,
+                    "dim": int(corpus_embs.shape[1]),
+                    "model": args.model,
+                }, f, ensure_ascii=False)
+            result = {"status": "ok", "dim": int(corpus_embs.shape[1]),
+                      "corpus_count": len(corpus), "query_count": len(queries)}
+
+        elif args.phase == "write_qual":
+            qp = qual_cache_paths(args.model)
+            embeddings = np.load(qp["corpus"]).tolist()
+            with open(qp["meta"], "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            corpus = meta["corpus"]
+            fn = QUAL_WRITE_FUNCS[args.db]
+            logger.info(f"WriteQual -> {args.db} ({len(corpus)} korpus)")
+            t = fn(args.model, corpus, embeddings)
+            result = {"status": "ok", "time": t, "corpus_count": len(corpus),
+                      "dim": meta["dim"]}
+
+        elif args.phase == "search_qual":
+            qp = qual_cache_paths(args.model)
+            query_vectors = np.load(qp["queries"]).tolist()
+            with open(qp["meta"], "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            queries = meta["queries"]
+            qrels = meta["qrels"]
+            fn = QUAL_SEARCH_FUNCS[args.db]
+            logger.info(f"SearchQual -> {args.db} (top_k={QUALITY_TOP_K})")
+            t0 = time.time()
+            retrieved = fn(args.model, query_vectors, top_k=QUALITY_TOP_K)
+            elapsed = time.time() - t0
+            gt_list = [qrels[q["id"]] for q in queries]
+            metrics = compute_quality_metrics(retrieved, gt_list, ks=(1, 10, 100))
+            metrics["search_time_sec"] = elapsed
+            metrics["query_count"] = len(queries)
+            metrics["corpus_count"] = len(meta["corpus"])
+            metrics["top_k"] = QUALITY_TOP_K
+            result = {"status": "ok", "metrics": metrics}
+
+        else:
+            result = {"status": "error", "error": f"unknown phase {args.phase}"}
+    except Exception as e:
+        logger.exception(f"Worker hata: {e}")
+        result = {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    if args.result_file:
+        with open(args.result_file, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, default=str)
+    logger.info(f"Worker bitti status={result.get('status')}")
+
+
+# ---------------------------------------------------------------
+# ORCHESTRATOR
+# ---------------------------------------------------------------
+def load_results():
+    if not os.path.exists(OUTPUT_JSON):
+        return None
+    try:
+        with open(OUTPUT_JSON, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def init_results(mode, doc_count):
+    return {
+        "metadata": {
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "mode": mode,
+            "doc_count": doc_count,
+            "query_count": len(TEST_QUERIES),
+            "quality_query_sample": QUALITY_QUERY_SAMPLE,
+            "quality_top_k": QUALITY_TOP_K,
+            "models": {k: v["path"] for k, v in MODELS.items()},
+        },
+        "write": {db: {} for db in DBS},
+        "search": {db: {} for db in DBS},
+        "quality_write": {db: {} for db in DBS},
+        "quality_search": {db: {} for db in DBS},
+    }
+
+
+def is_write_done(results, db, model):
+    return results.get("write", {}).get(db, {}).get(model, {}).get("status") == "ok"
+
+
+def is_search_done(results, db, model):
+    s = results.get("search", {}).get(db, {}).get(model)
+    if not isinstance(s, dict) or not s:
+        return False
+    if "error" in s and not any(isinstance(v, dict) and "avg_time" in v for v in s.values()):
+        return False
+    return any(isinstance(v, dict) and "avg_time" in v for v in s.values())
+
+
+def is_qual_write_done(results, db, model):
+    return results.get("quality_write", {}).get(db, {}).get(model, {}).get("status") == "ok"
+
+
+def is_qual_search_done(results, db, model):
+    q = results.get("quality_search", {}).get(db, {}).get(model)
+    if not isinstance(q, dict) or not q:
+        return False
+    return q.get("status") == "ok" and "metrics" in q
+
+
+def save_json(results):
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False, default=str)
-    print(f"\n  JSON kaydedildi: {OUTPUT_JSON}")
 
+
+def spawn_worker(phase, model, mode, db=None):
+    result_file = os.path.join(BASE_DIR, f".worker_result_{os.getpid()}.json")
+    if os.path.exists(result_file):
+        os.remove(result_file)
+    cmd = [sys.executable, os.path.abspath(__file__), "--worker",
+           "--phase", phase, "--model", model, "--mode", mode,
+           "--result-file", result_file]
+    if db:
+        cmd += ["--db", db]
+    logger.info(f"Subprocess: phase={phase} model={model} db={db or '-'}")
+    proc = subprocess.run(cmd)
+    if not os.path.exists(result_file):
+        return {"status": "error", "error": f"worker exit={proc.returncode} no result file (muhtemelen OOM kill)"}
+    with open(result_file, "r", encoding="utf-8") as f:
+        res = json.load(f)
+    try:
+        os.remove(result_file)
+    except Exception:
+        pass
+    if proc.returncode != 0 and res.get("status") == "ok":
+        res["warning"] = f"subprocess returncode={proc.returncode}"
+    return res
+
+
+def update_excel(results):
     try:
         build_excel(results)
-        print(f"  Excel kaydedildi: {OUTPUT_XLSX}")
+        logger.info(f"Excel guncellendi: {OUTPUT_XLSX}")
     except Exception as e:
-        print(f"  Excel hatasi: {e}")
+        logger.error(f"Excel hatasi: {e}")
 
 
+def orchestrate(mode, reset=False):
+    if reset:
+        if os.path.exists(OUTPUT_JSON):
+            os.remove(OUTPUT_JSON)
+        if os.path.exists(CACHE_DIR):
+            shutil.rmtree(CACHE_DIR)
+            os.makedirs(CACHE_DIR, exist_ok=True)
+        logger.info("Reset: sonuc + embeddings_cache silindi")
+
+    docs = load_documents(limit=20 if mode == "test" else None)
+    doc_count = len(docs)
+
+    print_header("SISTEM BILGISI")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu = torch.cuda.get_device_name(0)
+            vram = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"  GPU: {gpu}  ({vram:.2f} GB VRAM)")
+        else:
+            print("  GPU yok — CPU kullanilacak")
+    except Exception:
+        print("  Torch import hatasi")
+    print(f"  Mode={mode} doc_count={doc_count}")
+
+    results = load_results()
+    if results is None:
+        results = init_results(mode, doc_count)
+    else:
+        prev_mode = results.get("metadata", {}).get("mode")
+        if prev_mode != mode:
+            logger.error(f"Mevcut sonuclar mode={prev_mode}, istenen mode={mode}. --reset ile sifirlayin.")
+            sys.exit(2)
+        if results.get("metadata", {}).get("doc_count") != doc_count:
+            logger.warning(f"doc_count degisti {results['metadata'].get('doc_count')} -> {doc_count}")
+            results["metadata"]["doc_count"] = doc_count
+        # MODELS listesine yeni model eklenmis olabilir — dict'leri tamamla
+        for db in DBS:
+            results.setdefault("write", {}).setdefault(db, {})
+            results.setdefault("search", {}).setdefault(db, {})
+            results.setdefault("quality_write", {}).setdefault(db, {})
+            results.setdefault("quality_search", {}).setdefault(db, {})
+        results.setdefault("metadata", {}).setdefault("quality_query_sample", QUALITY_QUERY_SAMPLE)
+        results["metadata"].setdefault("quality_top_k", QUALITY_TOP_K)
+    save_json(results)
+
+    # ASAMA 1: encode (cache yoksa) + write (her DB)
+    print_header("ASAMA 1: ENCODE + WRITE")
+    for model_key, cfg in MODELS.items():
+        pending_writes = [db for db in DBS if not is_write_done(results, db, model_key)]
+        if not pending_writes:
+            logger.info(f"[{model_key}] tum write tamam, atlaniyor")
+            continue
+
+        if not encoding_cached(model_key, mode):
+            r = spawn_worker("encode", model_key, mode)
+            if r.get("status") != "ok":
+                logger.error(f"[{model_key}] encode HATA: {r.get('error')}")
+                for db in pending_writes:
+                    results["write"][db][model_key] = {"status": "error", "error": f"encode: {r.get('error')}"}
+                save_json(results)
+                update_excel(results)
+                continue
+        else:
+            logger.info(f"[{model_key}] embedding cache hit")
+
+        for db in pending_writes:
+            r = spawn_worker("write", model_key, mode, db=db)
+            if r.get("status") == "ok":
+                results["write"][db][model_key] = {
+                    "status": "ok",
+                    "time": r["time"],
+                    "record_count": r["record_count"],
+                    "dim": r["dim"],
+                }
+                logger.info(f"[{model_key}/{db}] write OK {r['time']:.2f}s")
+            else:
+                results["write"][db][model_key] = {"status": "error", "error": r.get("error", "unknown")}
+                logger.error(f"[{model_key}/{db}] write HATA: {r.get('error')}")
+            save_json(results)
+            update_excel(results)
+
+    # ASAMA 2: search (her DB her model)
+    print_header("ASAMA 2: SEARCH")
+    for db in DBS:
+        for model_key in MODELS:
+            if is_search_done(results, db, model_key):
+                continue
+            if not is_write_done(results, db, model_key):
+                continue
+            if not encoding_cached(model_key, mode):
+                logger.warning(f"[{model_key}/{db}] search: query embedding yok, atlaniyor")
+                continue
+
+            r = spawn_worker("search", model_key, mode, db=db)
+            if r.get("status") == "ok":
+                results["search"][db][model_key] = r["algorithms"]
+                for algo, perf in r["algorithms"].items():
+                    if isinstance(perf, dict) and "avg_time" in perf:
+                        logger.info(f"[{model_key}/{db}] {algo:<22} {perf['avg_time']*1000:8.3f} ms")
+            else:
+                results["search"][db][model_key] = {"error": r.get("error", "unknown")}
+                logger.error(f"[{model_key}/{db}] search HATA: {r.get('error')}")
+            save_json(results)
+            update_excel(results)
+
+    # ASAMA 3: BULMA BASARIMI (akademik retrieval quality — SQuAD)
+    print_header("ASAMA 3: BULMA BASARIMI (SQuAD)")
+    for model_key, cfg in MODELS.items():
+        pending_qwrites = [db for db in DBS if not is_qual_write_done(results, db, model_key)]
+        pending_qsearch = [db for db in DBS if not is_qual_search_done(results, db, model_key)]
+        if not pending_qwrites and not pending_qsearch:
+            logger.info(f"[{model_key}] quality tum DB tamam, atlaniyor")
+            continue
+
+        # encode_qual cache yoksa once encode et
+        if (pending_qwrites or pending_qsearch) and not qual_encoding_cached(model_key):
+            r = spawn_worker("encode_qual", model_key, mode)
+            if r.get("status") != "ok":
+                logger.error(f"[{model_key}] encode_qual HATA: {r.get('error')}")
+                for db in pending_qwrites:
+                    results["quality_write"][db][model_key] = {"status": "error",
+                                                                "error": f"encode_qual: {r.get('error')}"}
+                save_json(results)
+                update_excel(results)
+                continue
+            logger.info(f"[{model_key}] encode_qual OK corpus={r.get('corpus_count')} q={r.get('query_count')}")
+        else:
+            if pending_qwrites or pending_qsearch:
+                logger.info(f"[{model_key}] quality embedding cache hit")
+
+        # write_qual
+        for db in pending_qwrites:
+            r = spawn_worker("write_qual", model_key, mode, db=db)
+            if r.get("status") == "ok":
+                results["quality_write"][db][model_key] = {
+                    "status": "ok",
+                    "time": r["time"],
+                    "corpus_count": r["corpus_count"],
+                    "dim": r["dim"],
+                }
+                logger.info(f"[{model_key}/{db}] quality_write OK {r['time']:.2f}s")
+            else:
+                results["quality_write"][db][model_key] = {"status": "error",
+                                                            "error": r.get("error", "unknown")}
+                logger.error(f"[{model_key}/{db}] quality_write HATA: {r.get('error')}")
+            save_json(results)
+            update_excel(results)
+
+        # search_qual (yalnizca write basarili olanlarda)
+        for db in DBS:
+            if is_qual_search_done(results, db, model_key):
+                continue
+            if not is_qual_write_done(results, db, model_key):
+                continue
+            r = spawn_worker("search_qual", model_key, mode, db=db)
+            if r.get("status") == "ok":
+                results["quality_search"][db][model_key] = {
+                    "status": "ok",
+                    "metrics": r["metrics"],
+                }
+                m = r["metrics"]
+                logger.info(
+                    f"[{model_key}/{db}] quality "
+                    f"ndcg@10={m.get('ndcg@10', 0):.4f} "
+                    f"recall@10={m.get('recall@10', 0):.4f} "
+                    f"recall@100={m.get('recall@100', 0):.4f} "
+                    f"mrr@10={m.get('mrr@10', 0):.4f}"
+                )
+            else:
+                results["quality_search"][db][model_key] = {"status": "error",
+                                                             "error": r.get("error", "unknown")}
+                logger.error(f"[{model_key}/{db}] quality_search HATA: {r.get('error')}")
+            save_json(results)
+            update_excel(results)
+
+    update_excel(results)
+    print_summary(results)
+
+
+def print_summary(results):
+    print_header("OZET")
+    print(f"  Mod: {results['metadata']['mode']}")
+    print(f"  Belge: {results['metadata']['doc_count']}")
+    print(f"  Sorgu: {len(TEST_QUERIES)}")
+
+    rows = []
+    for db, db_data in results["search"].items():
+        for model_key, algos in db_data.items():
+            if not isinstance(algos, dict): continue
+            for algo, perf in algos.items():
+                if isinstance(perf, dict) and "avg_time" in perf:
+                    rows.append((db, model_key, algo, perf["avg_time"] * 1000))
+    rows.sort(key=lambda x: x[3])
+
+    print("\n  EN HIZLI 10 ARAMA:")
+    print("  " + "-" * 70)
+    for i, (db, model, algo, ms) in enumerate(rows[:10], 1):
+        print(f"  {i:2}. {db:<10} | {model:<14} | {algo:<22} | {ms:8.3f} ms")
+
+
+# ---------------------------------------------------------------
+# Excel
+# ---------------------------------------------------------------
 def build_excel(results):
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
     wb = openpyxl.Workbook()
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF")
@@ -566,13 +1382,12 @@ def build_excel(results):
     for c in ["A", "B", "C"]:
         ws.column_dimensions[c].width = 40
 
-    # 2) YAZMA SUREIERI
+    # 2) YAZMA SURELERI
     ws = wb.create_sheet("Yazma Sureleri")
     ws["A1"] = "MODEL x VERITABANI YAZMA SURELERI (saniye)"
     ws["A1"].font = Font(bold=True, size=14)
 
-    dbs = ["milvus", "qdrant", "chromadb", "lancedb", "weaviate"]
-    headers = ["Model"] + dbs
+    headers = ["Model"] + DBS
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=3, column=i, value=h)
         c.fill = header_fill
@@ -583,19 +1398,23 @@ def build_excel(results):
     row = 4
     for model_key in MODELS:
         ws.cell(row=row, column=1, value=model_key).border = border
-        for j, db in enumerate(dbs, 2):
-            write_data = results["write"].get(db, {}).get(model_key, {})
-            if write_data.get("status") == "ok":
-                ws.cell(row=row, column=j, value=round(write_data["time"], 3)).border = border
+        for j, db in enumerate(DBS, 2):
+            write_data = results.get("write", {}).get(db, {}).get(model_key, {})
+            cell = ws.cell(row=row, column=j)
+            if write_data.get("status") == "ok" and isinstance(write_data.get("time"), (int, float)):
+                cell.value = round(write_data["time"], 3)
+            elif write_data.get("status") == "error":
+                cell.value = "HATA"
             else:
-                ws.cell(row=row, column=j, value="HATA").border = border
-            ws.cell(row=row, column=j).alignment = center
+                cell.value = "-"
+            cell.border = border
+            cell.alignment = center
         row += 1
 
     for c in ["A", "B", "C", "D", "E", "F"]:
         ws.column_dimensions[c].width = 16
 
-    # 3) TUM ARAMA SONUCLARI (tek tablo)
+    # 3) TUM ARAMA SONUCLARI
     ws = wb.create_sheet("Arama Sonuclari")
     ws["A1"] = "TUM ARAMA TESTLERI (ms)"
     ws["A1"].font = Font(bold=True, size=14)
@@ -608,12 +1427,12 @@ def build_excel(results):
         c.alignment = center
 
     all_rows = []
-    for db, db_data in results["search"].items():
+    for db, db_data in results.get("search", {}).items():
         for model_key, algos in db_data.items():
             if not isinstance(algos, dict):
                 continue
             for algo, perf in algos.items():
-                if "avg_time" not in perf:
+                if not isinstance(perf, dict) or "avg_time" not in perf:
                     continue
                 all_rows.append({
                     "db": db, "model": model_key, "algo": algo,
@@ -646,16 +1465,15 @@ def build_excel(results):
         ws.column_dimensions[c].width = 10
 
     # 4) Her DB icin ayri sayfa
-    for db in dbs:
+    for db in DBS:
         ws = wb.create_sheet(f"{db.upper()}")
         ws["A1"] = f"{db.upper()} — Model x Algoritma (ms ortalama)"
         ws["A1"].font = Font(bold=True, size=14)
 
-        # Hangi algoritmalar var?
         algo_set = set()
-        for model_data in results["search"].get(db, {}).values():
+        for model_data in results.get("search", {}).get(db, {}).values():
             if isinstance(model_data, dict):
-                algo_set.update(model_data.keys())
+                algo_set.update(k for k, v in model_data.items() if isinstance(v, dict) and "avg_time" in v)
         algos = sorted(algo_set)
 
         headers = ["Model"] + algos
@@ -668,176 +1486,152 @@ def build_excel(results):
         row = 4
         for model_key in MODELS:
             ws.cell(row=row, column=1, value=model_key)
-            m = results["search"].get(db, {}).get(model_key, {})
+            m = results.get("search", {}).get(db, {}).get(model_key, {})
             for j, algo in enumerate(algos, 2):
                 perf = m.get(algo) if isinstance(m, dict) else None
+                cell = ws.cell(row=row, column=j)
                 if isinstance(perf, dict) and "avg_time" in perf:
-                    ws.cell(row=row, column=j, value=round(perf["avg_time"] * 1000, 3))
+                    cell.value = round(perf["avg_time"] * 1000, 3)
                 else:
-                    ws.cell(row=row, column=j, value="-")
-                ws.cell(row=row, column=j).alignment = center
+                    cell.value = "-"
+                cell.alignment = center
             row += 1
 
         ws.column_dimensions["A"].width = 16
         for col_idx in range(2, len(algos) + 2):
             ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 14
 
+    # 5) BULMA BASARIMI (akademik retrieval quality — SQuAD)
+    metric_cols = ["ndcg@10", "recall@10", "recall@100", "mrr@10", "hit@1", "hit@10"]
+
+    ws = wb.create_sheet("Bulma Basarimi")
+    ws["A1"] = "BELGE BULMA BASARIMI — SQuAD (akademik / BEIR-style)"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A2"] = (f"Sorgu ornek: {results['metadata'].get('quality_query_sample', QUALITY_QUERY_SAMPLE)}  "
+                f"top_k: {results['metadata'].get('quality_top_k', QUALITY_TOP_K)}  "
+                "metrik: nDCG@10 (birincil), Recall@10/100, MRR@10, Hit@1/10")
+
+    headers = ["Sira", "Veritabani", "Model"] + metric_cols + ["search_time_sec"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=4, column=i, value=h)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = center
+        c.border = border
+
+    quality_rows = []
+    for db, db_data in results.get("quality_search", {}).items():
+        for model_key, payload in db_data.items():
+            if not isinstance(payload, dict) or payload.get("status") != "ok":
+                continue
+            m = payload.get("metrics", {})
+            quality_rows.append({
+                "db": db, "model": model_key,
+                "metrics": m,
+                "search_time": m.get("search_time_sec", 0.0),
+            })
+    quality_rows.sort(key=lambda x: x["metrics"].get("ndcg@10", 0.0), reverse=True)
+
+    row = 5
+    for i, r in enumerate(quality_rows, 1):
+        vals = [i, r["db"], r["model"]]
+        for mc in metric_cols:
+            vals.append(round(r["metrics"].get(mc, 0.0), 4))
+        vals.append(round(r["search_time"], 3))
+        for j, v in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=j, value=v)
+            cell.alignment = center
+            cell.border = border
+            if i <= 3:
+                cell.fill = gold
+        row += 1
+
+    ws.column_dimensions["A"].width = 6
+    for c_idx in range(2, 4):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(c_idx)].width = 18
+    for c_idx in range(4, 4 + len(metric_cols) + 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(c_idx)].width = 13
+
+    # Her DB icin model x metrik tablosu
+    for db in DBS:
+        ws = wb.create_sheet(f"BB_{db.upper()}")
+        ws["A1"] = f"{db.upper()} — Bulma Basarimi (Model x Metrik)"
+        ws["A1"].font = Font(bold=True, size=14)
+
+        headers = ["Model"] + metric_cols
+        for i, h in enumerate(headers, 1):
+            c = ws.cell(row=3, column=i, value=h)
+            c.fill = header_fill
+            c.font = header_font
+            c.alignment = center
+            c.border = border
+
+        row = 4
+        for model_key in MODELS:
+            ws.cell(row=row, column=1, value=model_key).border = border
+            payload = results.get("quality_search", {}).get(db, {}).get(model_key, {})
+            metrics = payload.get("metrics", {}) if payload.get("status") == "ok" else {}
+            for j, mc in enumerate(metric_cols, 2):
+                cell = ws.cell(row=row, column=j)
+                cell.value = round(metrics[mc], 4) if mc in metrics else "-"
+                cell.alignment = center
+                cell.border = border
+            row += 1
+
+        ws.column_dimensions["A"].width = 18
+        for c_idx in range(2, 2 + len(metric_cols)):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(c_idx)].width = 13
+
     wb.save(OUTPUT_XLSX)
 
 
-def print_summary(results):
-    print_header("OZET")
-    print(f"  Mod: {results['metadata']['mode']}")
-    print(f"  Belge: {results['metadata']['doc_count']}")
-    print(f"  Sorgu: {len(TEST_QUERIES)}")
-
-    # En hizli 10 arama
-    rows = []
-    for db, db_data in results["search"].items():
-        for model_key, algos in db_data.items():
-            if not isinstance(algos, dict):
-                continue
-            for algo, perf in algos.items():
-                if "avg_time" in perf:
-                    rows.append((db, model_key, algo, perf["avg_time"] * 1000))
-    rows.sort(key=lambda x: x[3])
-
-    print("\n  EN HIZLI 10 ARAMA:")
-    print("  " + "-" * 70)
-    for i, (db, model, algo, ms) in enumerate(rows[:10], 1):
-        print(f"  {i:2}. {db:<10} | {model:<14} | {algo:<22} | {ms:8.3f} ms")
-
-
 # ---------------------------------------------------------------
-# Ana akis
+# Entry
 # ---------------------------------------------------------------
-def run_benchmark(mode):
-    doc_limit = 20 if mode == "test" else None
-    docs = load_documents(limit=doc_limit)
-    texts = [d["text"] for d in docs]
-
-    # GPU bilgisi
-    print_header("SISTEM BILGISI")
-    if torch.cuda.is_available():
-        gpu = torch.cuda.get_device_name(0)
-        vram = torch.cuda.get_device_properties(0).total_memory / 1e9
-        print(f"  GPU: {gpu}  ({vram:.2f} GB VRAM)")
-    else:
-        print("  GPU yok — CPU kullanilacak")
-
-    results = {
-        "metadata": {
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "mode": mode,
-            "doc_count": len(docs),
-            "query_count": len(TEST_QUERIES),
-            "models": {k: v["path"] for k, v in MODELS.items()},
-        },
-        "write": {db: {} for db in ["milvus", "qdrant", "chromadb", "lancedb", "weaviate"]},
-        "search": {db: {} for db in ["milvus", "qdrant", "chromadb", "lancedb", "weaviate"]},
-    }
-
-    # Sorgu vektorlerini model_key -> vektor seklinde sakla
-    # (Arama benchmark asamasinda gerekli olacak)
-    query_vectors_by_model = {}
-
-    # ---- ASAMA 1: Her model icin encode + tum DB'lere yaz ----
-    for model_key, cfg in MODELS.items():
-        print_header(f"MODEL: {model_key}  (dim={cfg['dim']})")
-
-        try:
-            doc_embs, query_embs = encode_model(cfg["path"], texts, TEST_QUERIES)
-        except Exception as e:
-            print(f"  HATA: {model_key} yuklenemedi: {e}")
-            for db in results["write"]:
-                results["write"][db][model_key] = {"status": "error", "error": str(e)}
-            continue
-
-        query_vectors_by_model[model_key] = query_embs
-
-        # Her veritabanina sirayla yaz
-        write_funcs = {
-            "milvus":   write_to_milvus,
-            "qdrant":   write_to_qdrant,
-            "chromadb": write_to_chromadb,
-            "lancedb":  write_to_lancedb,
-            "weaviate": write_to_weaviate,
-        }
-
-        for db_name, fn in write_funcs.items():
-            print(f"  -> {db_name} yaziliyor...")
-            try:
-                t = fn(model_key, docs, doc_embs)
-                results["write"][db_name][model_key] = {
-                    "status": "ok", "time": t, "record_count": len(docs), "dim": cfg["dim"],
-                }
-                print(f"     OK: {t:.2f}s")
-            except Exception as e:
-                results["write"][db_name][model_key] = {"status": "error", "error": str(e)}
-                print(f"     HATA: {e}")
-
-        # Belge embeddinglerini bellekten at — siradaki modelin yeri olsun
-        del doc_embs
-        free_memory()
-
-        # Her modelden sonra ara checkpoint
-        with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False, default=str)
-
-    # ---- ASAMA 2: Her DB'de her model icin arama benchmark ----
-    print_header("ARAMA BENCHMARK BASLIYOR")
-
-    search_funcs = {
-        "milvus":   search_milvus,
-        "qdrant":   search_qdrant,
-        "chromadb": search_chromadb,
-        "lancedb":  search_lancedb,
-        "weaviate": search_weaviate,
-    }
-
-    for db_name, fn in search_funcs.items():
-        print_header(f"ARAMA: {db_name.upper()}")
-        for model_key in MODELS:
-            qvs = query_vectors_by_model.get(model_key)
-            if qvs is None:
-                continue
-            print(f"  {model_key}...")
-            try:
-                algo_results = fn(model_key, qvs)
-                results["search"][db_name][model_key] = algo_results
-                for algo, perf in algo_results.items():
-                    print(f"    {algo:<22} {perf['avg_time']*1000:8.3f} ms")
-            except Exception as e:
-                results["search"][db_name][model_key] = {"error": str(e)}
-                print(f"    HATA: {e}")
-
-        # Her DB sonrasi checkpoint
-        with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False, default=str)
-
-    # ---- SONUC ----
-    save_results(results)
-    print_summary(results)
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Vektor DB Multi-Model Benchmark")
-    parser.add_argument(
-        "--mode",
-        choices=["test", "full"],
-        default="test",
-        help="test = 20 belge ile hizli test, full = tum belgelerle tam benchmark",
-    )
+    parser = argparse.ArgumentParser(description="Vektor DB Multi-Model Benchmark (subprocess izolasyonlu)")
+    parser.add_argument("--mode", choices=["test", "full"], default="test")
+    parser.add_argument("--reset", action="store_true", help="cache + sonuc dosyasini sifirla")
+    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--phase",
+                        choices=["encode", "write", "search",
+                                 "encode_qual", "write_qual", "search_qual"],
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--model", help=argparse.SUPPRESS)
+    parser.add_argument("--db", choices=DBS, help=argparse.SUPPRESS)
+    parser.add_argument("--result-file", dest="result_file", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.worker:
+        worker_main(args)
+        return
+
+    # Orchestrator
+    log_file = setup_logging("orchestrator")
+    sys.stdout = _PrintToLogger(logging.INFO)
+    sys.stderr = _PrintToLogger(logging.ERROR)
+    logger.info(f"Log dosyasi: {log_file}")
+    logger.info(f"Orchestrator PID={os.getpid()} mode={args.mode} reset={args.reset}")
+
+    inhibit_proc = _inhibit_suspend()
+    threading.Thread(target=_heartbeat, daemon=True).start()
 
     print("=" * 70)
     print(f"  VEKTOR DATABASE BENCHMARK — mod: {args.mode.upper()}")
     print("=" * 70)
 
+    t_start = time.time()
     try:
-        run_benchmark(args.mode)
+        orchestrate(args.mode, reset=args.reset)
+        logger.info(f"Benchmark TAMAMLANDI — sure: {(time.time()-t_start)/60:.1f} dk")
     except KeyboardInterrupt:
-        print("\n  Kullanici iptali — cikiliyor")
+        logger.warning("Kullanici iptali (Ctrl+C) — cikiliyor")
+    except Exception as e:
+        logger.exception(f"Benchmark FATAL hata: {e}")
+        raise
+    finally:
+        if inhibit_proc is not None:
+            inhibit_proc.terminate()
 
 
 if __name__ == "__main__":
