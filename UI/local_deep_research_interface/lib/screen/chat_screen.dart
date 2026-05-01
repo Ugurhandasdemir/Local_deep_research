@@ -61,9 +61,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<Map<String, dynamic>> _uploadedDocs = [];
 
   final List<String> _modelOptions = [
-    'ministral-3:3b',
+    'nemotron-3-nano:4b',
+    'medgemma1.5:latest',
+    'granite4.1:3b',
     'translategemma:4b',
-    'qwen3-vl:2b',
+    'ministral-3:3b',
   ];
   String _selectedModel = '';
 

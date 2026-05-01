@@ -89,9 +89,13 @@ source env/bin/activate
 pip install -r requirements.txt
 ```
 
-Ollama kullanıyorsanız varsayılan model örneği:
+Uygulamada kullanılan Ollama modelleri:
 
 ```bash
+ollama pull nemotron-3-nano:4b
+ollama pull medgemma1.5:latest
+ollama pull granite4.1:3b
+ollama pull translategemma:4b
 ollama pull ministral-3:3b
 ```
 
@@ -211,7 +215,7 @@ curl -X POST http://127.0.0.1:8000/ask/question/ai \
   -H "Content-Type: application/json" \
   -d '{
     "input": "Bu dokümanın ana konusu nedir?",
-    "model": "ministral-3:3b",
+    "model": "nemotron-3-nano:4b",
     "scenario": "balanced"
   }'
 ```

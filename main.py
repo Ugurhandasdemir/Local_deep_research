@@ -30,7 +30,7 @@ PDF_DB_PATH = os.path.join(BASE_DIR, "pdfs.db")
 
 class GirdiVerisi(BaseModel):
     input: str
-    model: str = "ministral-3:3b"  # model identifier sent from client
+    model: str = "nemotron-3-nano:4b"  # model identifier sent from client
     scenario: str = "balanced"
     db: str | None = None
     embedding: str | None = None
@@ -110,7 +110,7 @@ def get_pdf(filename: str):
     raise HTTPException(status_code=404, detail="PDF bulunamadı")
 
 
-def ollama(context_text: str, user_query: str = "", is_deep_research: bool = False, model_name: str = "ministral-3:3b") -> str:
+def ollama(context_text: str, user_query: str = "", is_deep_research: bool = False, model_name: str = "nemotron-3-nano:4b") -> str:
     if is_deep_research:
         template_str = """
         System:

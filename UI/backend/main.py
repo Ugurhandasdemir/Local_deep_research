@@ -23,7 +23,7 @@ collection = client.get_or_create_collection(
 
 class GirdiVerisi(BaseModel):
     girilen_metin: str
-    model: str = "ministral-3:3b"
+    model: str = "nemotron-3-nano:4b"
 
 def sorgu_yap(sorgu: str, n_results: int = 5) -> str:
     """ChromaDB'de sorgu yaparak en yakın sonuçları döndürür"""
