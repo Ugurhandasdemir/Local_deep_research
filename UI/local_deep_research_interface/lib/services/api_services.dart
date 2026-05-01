@@ -2,15 +2,24 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
-const String API_BASE_URL = 'http://127.0.0.1:8000';
+const String apiBaseUrl = 'http://127.0.0.1:8000';
 
 class ApiService {
-  static Future<String> normalChat(String message, {String? model}) async {
+  static Future<String> normalChat(
+    String message, {
+    String? model,
+    String? scenario,
+    String? db,
+    String? embedding,
+  }) async {
     try {
-      final payload = {"input": message};
+      final payload = <String, dynamic>{"input": message};
       if (model != null) payload["model"] = model;
+      if (scenario != null) payload["scenario"] = scenario;
+      if (db != null) payload["db"] = db;
+      if (embedding != null) payload["embedding"] = embedding;
       final response = await http.post(
-        Uri.parse("$API_BASE_URL/normal/chat"),
+        Uri.parse("$apiBaseUrl/normal/chat"),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode(payload),
       );
@@ -22,11 +31,20 @@ class ApiService {
     } catch (e) { return "Bağlantı hatası: $e"; }
   }
 
-  static Future<List> getApiResponse(String message, {String? model}) async {
-    final url = Uri.parse('$API_BASE_URL/ask/question/ai');
+  static Future<List> getApiResponse(
+    String message, {
+    String? model,
+    String? scenario,
+    String? db,
+    String? embedding,
+  }) async {
+    final url = Uri.parse('$apiBaseUrl/ask/question/ai');
     try {
-      final body = {'input': message};
+      final body = <String, dynamic>{'input': message};
       if (model != null) body['model'] = model;
+      if (scenario != null) body['scenario'] = scenario;
+      if (db != null) body['db'] = db;
+      if (embedding != null) body['embedding'] = embedding;
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -52,7 +70,7 @@ class ApiService {
       final pdfBase64 = base64Encode(fileBytes);
       
       final response = await http.post(
-        Uri.parse("$API_BASE_URL/upload/pdf/base64"),
+        Uri.parse("$apiBaseUrl/upload/pdf/base64"),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
           "pdf_base64": pdfBase64,
@@ -68,6 +86,7 @@ class ApiService {
           "chunks_added": jsonResponse['chunks_added'] ?? 0,
           "characters": jsonResponse['total_characters'] ?? 0,
           "pages": jsonResponse['pages_processed'] ?? 0,
+          "index_results": jsonResponse['index_results'] ?? [],
         };
       }
       return {"status": "error", "message": "HTTP Hatası: ${response.statusCode}"};

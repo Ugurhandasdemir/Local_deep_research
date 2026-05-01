@@ -1,55 +1,125 @@
-# Python derleme dosyaları
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 
-# Sanal ortam klasörleri (varsa)
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+coverage.xml
+htmlcov/
+
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# -----------------------------------------------------------------------------
+# Virtual environments and local configuration
+# -----------------------------------------------------------------------------
+env/
 venv/
 .venv/
-env/
+ENV/
 
+.env
+.env.*
+!.env.example
 
-# PDF dosyaları (Eğer kaynak dosyaları depoya atmak istemiyorsanız)
-*.pdf
+# -----------------------------------------------------------------------------
+# Notebooks
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
 
-# VS Code ayarları (Kişisel ayarlar içeriyorsa)
-.vscode/
-DB/
-benchmark_grafikleri/
-models/
-
-# İşletim sistemi dosyaları
-.DS_Store
-Thumbs.db
-
-# Flutter / Dart
-**/build/
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
-
-# IDE
-.vscode/
-.idea/
-
-
-
-# Geçici dosyalar
+# -----------------------------------------------------------------------------
+# Logs, temporary files and local agent files
+# -----------------------------------------------------------------------------
+logs/
 *.log
 *.tmp
 *.bak
+*.swp
+*.swo
+.worker_result_*.json
 
-DB/chorame/yerel_veritabani/
-DB/chorame/multi_index_chroma_db/
+.codex/
+.claude/
+agents.md
 
-# Ignore test UI folder (both latin 'i' and turkish dotless 'ı' variants)
+# -----------------------------------------------------------------------------
+# Project data, uploads and generated benchmark outputs
+# -----------------------------------------------------------------------------
+data/
+*.pdf
+*.db
+*.sqlite
+*.sqlite3
+
+CUSTOM_DATASET/*.json
+metin_dosyasi.json
+
+multi_model_benchmark_results.json
+multi_model_benchmark_results.xlsx
+multi_model_benchmark_results.md
+benchmark_grafikleri/
+
+# -----------------------------------------------------------------------------
+# Vector databases, embeddings and model artifacts
+# -----------------------------------------------------------------------------
+/DB/
+models/
+src/models/
+embeddings_cache/
+
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+
+# -----------------------------------------------------------------------------
+# Flutter / Dart
+# -----------------------------------------------------------------------------
+**/build/
+**/.dart_tool/
+.dart_tool/
+
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+.pub-cache/
+
+**/android/local.properties
+**/ios/Flutter/ephemeral/
+**/macos/Flutter/ephemeral/
+**/linux/flutter/ephemeral/
+**/windows/flutter/ephemeral/
+
+*.apk
+*.aab
+*.ipa
+
+# -----------------------------------------------------------------------------
+# IDE and operating system files
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.code-workspace
+
+.DS_Store
+Thumbs.db
+
+# -----------------------------------------------------------------------------
+# Local test/playground folders
+# -----------------------------------------------------------------------------
 test_ui/
 test_uı/
-
-/.claude./
-/.vscode/
-logs/
-embeddings_cache/
-.worker_result_*.json

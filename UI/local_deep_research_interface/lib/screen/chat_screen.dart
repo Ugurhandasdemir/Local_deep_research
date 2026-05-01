@@ -37,7 +37,27 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<ChatSession> _chatHistory = [];
   String? _currentSessionId;
   bool _isWaitingForResponse = false;
+  // Search scenarios: fast | balanced | best
+  // - fast      -> chromadb + all_mini_l6   (en hizli, kalite orta)
+  // - balanced  -> weaviate + bge_squad     (kalite + hiz dengeli)
+  // - best      -> milvus + bge_squad       (en yuksek ndcg, olcekli)
+  String _searchMode = 'balanced';
   bool _deepResearchEnabled = true;
+  static const Map<String, Map<String, String>> _scenarioMap = {
+    'fast':     {'db': 'chromadb', 'embedding': 'all_mini_l6'},
+    'balanced': {'db': 'weaviate', 'embedding': 'bge_squad'},
+    'best':     {'db': 'milvus',   'embedding': 'bge_squad'},
+  };
+  static const Map<String, String> _scenarioLabel = {
+    'fast':     'Hizli',
+    'balanced': 'Dengeli',
+    'best':     'En Yuksek Basarim',
+  };
+  static const Map<String, IconData> _scenarioIcon = {
+    'fast':     Icons.flash_on,
+    'balanced': Icons.balance,
+    'best':     Icons.workspace_premium,
+  };
   final List<Map<String, dynamic>> _uploadedDocs = [];
 
   final List<String> _modelOptions = [
@@ -198,6 +218,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty) return;
 
     final useDeep = _deepResearchEnabled;
+    final scenario = _searchMode;
+    final scenarioCfg = _scenarioMap[scenario] ?? const {};
     _textController.clear();
 
     final userMsg = Message(
@@ -236,8 +258,13 @@ class _ChatScreenState extends State<ChatScreen> {
       Message bot;
       if (useDeep) {
         try {
-          final r =
-              await ApiService.getApiResponse(text, model: _selectedModel);
+          final r = await ApiService.getApiResponse(
+            text,
+            model: _selectedModel,
+            scenario: scenario,
+            db: scenarioCfg['db'],
+            embedding: scenarioCfg['embedding'],
+          );
           if (!mounted) return;
           if (r.length < 2 || !r[1]) {
             bot = Message(
@@ -261,7 +288,13 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       } else {
         try {
-          final r = await ApiService.normalChat(text, model: _selectedModel);
+          final r = await ApiService.normalChat(
+            text,
+            model: _selectedModel,
+            scenario: scenario,
+            db: scenarioCfg['db'],
+            embedding: scenarioCfg['embedding'],
+          );
           if (!mounted) return;
           bot = Message(
               id: _uuid.v4(),
@@ -585,7 +618,7 @@ class _ChatScreenState extends State<ChatScreen> {
           Text(
             _deepResearchEnabled
                 ? 'PDF Kaynakları Analiz Ediliyor…'
-                : 'Yanıt hazırlanıyor…',
+                : '${_scenarioLabel[_searchMode]} modunda arama…',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
@@ -673,7 +706,7 @@ class _ChatScreenState extends State<ChatScreen> {
             // Bottom row
             Row(
               children: [
-                // deep research toggle
+                // deep research toggle (button)
                 SizedBox(
                   width: 40,
                   height: 22,
@@ -701,6 +734,77 @@ class _ChatScreenState extends State<ChatScreen> {
                         : (isDark
                             ? Colors.grey.shade500
                             : Colors.grey.shade500),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // search mode dropdown
+                PopupMenuButton<String>(
+                  initialValue: _searchMode,
+                  tooltip: 'Arama modu',
+                  onSelected: (v) => setState(() => _searchMode = v),
+                  position: PopupMenuPosition.over,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  itemBuilder: (ctx) => _scenarioLabel.entries.map((e) {
+                    final selected = e.key == _searchMode;
+                    return PopupMenuItem<String>(
+                      value: e.key,
+                      child: Row(
+                        children: [
+                          Icon(
+                            _scenarioIcon[e.key],
+                            size: 18,
+                            color: selected ? AppColors.blue : Colors.grey,
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            e.value,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: selected
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: selected ? AppColors.blue : null,
+                            ),
+                          ),
+                          if (selected) ...[
+                            const SizedBox(width: 8),
+                            Icon(Icons.check, size: 16, color: AppColors.blue),
+                          ],
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.blue.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: AppColors.blue.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(_scenarioIcon[_searchMode],
+                            size: 16, color: AppColors.blue),
+                        const SizedBox(width: 6),
+                        Text(
+                          _scenarioLabel[_searchMode] ?? 'Mod',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.blue,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(Icons.expand_more,
+                            size: 16, color: AppColors.blue),
+                      ],
+                    ),
                   ),
                 ),
                 const Spacer(),

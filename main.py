@@ -1,15 +1,17 @@
 import chromadb
-from chromadb.utils import embedding_functions
-from sentence_transformers import SentenceTransformer
 from typing import Dict, Any, List
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 import os
 import base64
 import io
+import sqlite3
+from datetime import datetime
 from PyPDF2 import PdfReader
+from urllib.parse import quote
+from vector_indexes import index_document_for_all_scenarios, search_vector_index
 
 app = FastAPI()
 
@@ -21,12 +23,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "DB", "chorame", "yerel_veritabani")
-PDF_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "CUSTOM_DATASET", "pdfs")
+BASE_DIR = os.path.dirname(__file__)
+DB_PATH = os.path.join(BASE_DIR, "DB", "chorame", "yerel_veritabani")
+PDF_UPLOAD_DIR = os.path.join(BASE_DIR, "data", "dataset_pdf")
+PDF_DB_PATH = os.path.join(BASE_DIR, "pdfs.db")
 
 class GirdiVerisi(BaseModel):
     input: str
     model: str = "ministral-3:3b"  # model identifier sent from client
+    scenario: str = "balanced"
+    db: str | None = None
+    embedding: str | None = None
 
 class PDFMetniVerisi(BaseModel):
     pdf_metni: str
@@ -38,13 +45,69 @@ class PDFBase64Verisi(BaseModel):
 
 os.makedirs(PDF_UPLOAD_DIR, exist_ok=True)
 
-app.mount("/pdfs", StaticFiles(directory=PDF_UPLOAD_DIR), name="pdfs")
-
 COLLECTION_NAME = "dokumanlarim"
 
-MODEL_NAME = "all-MiniLM-L6-v2"
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
+
+
+def safe_pdf_filename(filename: str) -> str:
+    safe_name = os.path.basename(filename or "").strip()
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Geçerli bir PDF dosya adı gerekli")
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name = f"{safe_name}.pdf"
+    return safe_name
+
+
+def ensure_pdf_table() -> None:
+    with sqlite3.connect(PDF_DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdfs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT UNIQUE,
+                content BLOB,
+                uploaded_at TEXT
+            )
+            """
+        )
+
+
+def save_pdf_to_db(filename: str, content: bytes) -> None:
+    ensure_pdf_table()
+    with sqlite3.connect(PDF_DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO pdfs(filename, content, uploaded_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(filename) DO UPDATE SET
+                content = excluded.content,
+                uploaded_at = excluded.uploaded_at
+            """,
+            (filename, sqlite3.Binary(content), datetime.now().isoformat(timespec="seconds")),
+        )
+
+
+@app.get("/pdfs/{filename:path}")
+def get_pdf(filename: str):
+    safe_name = safe_pdf_filename(filename)
+    file_path = os.path.join(PDF_UPLOAD_DIR, safe_name)
+
+    if os.path.isfile(file_path):
+        return FileResponse(file_path, media_type="application/pdf", filename=safe_name)
+
+    ensure_pdf_table()
+    with sqlite3.connect(PDF_DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT content FROM pdfs WHERE filename = ?",
+            (safe_name,),
+        ).fetchone()
+
+    if row and row[0]:
+        return Response(content=row[0], media_type="application/pdf")
+
+    raise HTTPException(status_code=404, detail="PDF bulunamadı")
 
 
 def ollama(context_text: str, user_query: str = "", is_deep_research: bool = False, model_name: str = "ministral-3:3b") -> str:
@@ -85,19 +148,20 @@ def ollama(context_text: str, user_query: str = "", is_deep_research: bool = Fal
 def get_collection():
     client = chromadb.PersistentClient(path=DB_PATH)
 
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=MODEL_NAME)
-
-    return client.get_or_create_collection(name=COLLECTION_NAME, embedding_function=ef)
+    # Mevcut koleksiyon Chroma'nın default embedding ayarıyla kaydedilmiş.
+    # Burada yeni embedding_function vermek ChromaDB'de config conflict hatası üretir.
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
 
 def hnsw_vector_search(queries: List[str], top_k: int = 5):
-    model = SentenceTransformer(MODEL_NAME)
     collection = get_collection()
-    
-    tum_sonuclar = [] 
+
+    tum_sonuclar = []
 
     for q in queries:
-        q_vec = model.encode(q).tolist()
-        results = collection.query(query_embeddings=[q_vec], n_results=top_k, include=["documents", "metadatas", "distances"])
+        results = collection.query(query_texts=[q], n_results=top_k, include=["documents", "metadatas", "distances"])
         
         if results['documents']:
             for i, (doc, meta, dist) in enumerate(zip(
@@ -117,6 +181,39 @@ def hnsw_vector_search(queries: List[str], top_k: int = 5):
 
     return tum_sonuclar
 
+
+def upsert_default_chroma_chunks(pdf_adi: str, full_text: str) -> int:
+    collection = get_collection()
+
+    chunk_size = 3000
+    chunks = [
+        full_text[i:i + chunk_size]
+        for i in range(0, len(full_text), chunk_size)
+        if full_text[i:i + chunk_size].strip()
+    ]
+
+    if not chunks:
+        return 0
+
+    collection.upsert(
+        documents=chunks,
+        metadatas=[
+            {"filename": pdf_adi, "source": pdf_adi, "chunk": idx, "origin": "upload"}
+            for idx in range(1, len(chunks) + 1)
+        ],
+        ids=[f"default:{pdf_adi}:{idx}" for idx in range(1, len(chunks) + 1)],
+    )
+    return len(chunks)
+
+
+def pdf_processed_message(pdf_adi: str, index_results: List[Dict[str, Any]]) -> str:
+    targets = [r for r in index_results if r.get("scenario") != "all"]
+    success_count = sum(1 for r in targets if r.get("status") == "success")
+    total_count = len(targets)
+    if not total_count:
+        return f"{pdf_adi} başarıyla işlendi"
+    return f"{pdf_adi} başarıyla işlendi ({success_count}/{total_count} vektör indeks güncellendi)"
+
 @app.post("/ask/question/ai")
 def askQuestionAI(veri: GirdiVerisi) -> Dict[str, Any]: 
     try:
@@ -126,7 +223,12 @@ def askQuestionAI(veri: GirdiVerisi) -> Dict[str, Any]:
                 "message": "Soru boş olamaz"
             }
         
-        search_results = hnsw_vector_search([veri.input])
+        search_results = search_vector_index(
+            veri.input,
+            scenario=veri.scenario,
+            db=veri.db,
+            embedding=veri.embedding,
+        )
         
         if not search_results:
             print("! ChromaDB'de ilgili doküman bulunamadı", flush=True)
@@ -146,9 +248,10 @@ def askQuestionAI(veri: GirdiVerisi) -> Dict[str, Any]:
 
         sources = []
         for res in search_results:
+            filename = res["dosya_adi"] or ""
             sources.append({
-                "file": res["dosya_adi"],
-                "url": f"http://127.0.0.1:8000/pdfs/{res['dosya_adi']}",
+                "file": filename,
+                "url": f"http://127.0.0.1:8000/pdfs/{quote(filename, safe='')}",
                 "score": res["benzerlik"],
                 "metin": res["metin"][:200]
             })
@@ -173,27 +276,18 @@ async def ingestPdf(veri: PDFMetniVerisi) -> Dict[str, Any]:
                 "message": "PDF metni boş olamaz"
             }
         
-        pdf_adi = veri.pdf_adi or "Yüklenen PDF"
+        pdf_adi = safe_pdf_filename(veri.pdf_adi or "Yüklenen PDF.pdf")
         
-        collection = get_collection()
-        
-        chunk_size = 3000
-        chunks = [veri.pdf_metni[i:i+chunk_size] 
-                 for i in range(0, len(veri.pdf_metni), chunk_size)]
-        
-        for idx, chunk in enumerate(chunks, 1):
-            collection.add(
-                documents=[chunk],
-                metadatas=[{"filename": pdf_adi, "chunk": idx}],
-                ids=[f"{pdf_adi}_{idx}"]
-            )
-        
+        chunks_added = upsert_default_chroma_chunks(pdf_adi, veri.pdf_metni)
+        index_results = index_document_for_all_scenarios(pdf_adi, veri.pdf_metni)
+
         return {
             "status": "success",
-            "message": f"{pdf_adi} başarıyla işlendi",
+            "message": pdf_processed_message(pdf_adi, index_results),
             "document_name": pdf_adi,
-            "chunks_added": len(chunks),
-            "total_characters": len(veri.pdf_metni)
+            "chunks_added": chunks_added,
+            "total_characters": len(veri.pdf_metni),
+            "index_results": index_results
         }
         
     except Exception as e:
@@ -216,8 +310,8 @@ async def uploadPdfBase64(veri: PDFBase64Verisi) -> Dict[str, Any]:
                 "message": "PDF base64 boş olamaz"
             }
         
-        pdf_adi = veri.pdf_adi or "Yüklenen PDF"
-        
+        pdf_adi = safe_pdf_filename(veri.pdf_adi or "Yüklenen PDF.pdf")
+
         try:
             pdf_bytes = base64.b64decode(veri.pdf_base64)
             print(f"  Dosya boyutu: {len(pdf_bytes)} bytes", flush=True)
@@ -225,6 +319,17 @@ async def uploadPdfBase64(veri: PDFBase64Verisi) -> Dict[str, Any]:
             return {
                 "status": "error",
                 "message": f"Base64 decode hatası: {decode_error}"
+            }
+
+        try:
+            file_path = os.path.join(PDF_UPLOAD_DIR, pdf_adi)
+            with open(file_path, "wb") as buffer:
+                buffer.write(pdf_bytes)
+            save_pdf_to_db(pdf_adi, pdf_bytes)
+        except Exception as save_error:
+            return {
+                "status": "error",
+                "message": f"PDF kaydetme hatası: {save_error}"
             }
         
         try:
@@ -256,33 +361,23 @@ async def uploadPdfBase64(veri: PDFBase64Verisi) -> Dict[str, Any]:
             }
         
         try:
-            collection = get_collection()
-            
-            chunk_size = 3000
-            chunks = [full_text[i:i+chunk_size] 
-                     for i in range(0, len(full_text), chunk_size)]
-            
-            for idx, chunk in enumerate(chunks, 1):
-                collection.add(
-                    documents=[chunk],
-                    metadatas=[{"filename": pdf_adi, "chunk": idx}],
-                    ids=[f"{pdf_adi}_{idx}"]
-                )
-            
-            
+            chunks_added = upsert_default_chroma_chunks(pdf_adi, full_text)
+            index_results = index_document_for_all_scenarios(pdf_adi, full_text)
+
             return {
                 "status": "success",
-                "message": f"{pdf_adi} başarıyla işlendi",
+                "message": pdf_processed_message(pdf_adi, index_results),
                 "document_name": pdf_adi,
-                "chunks_added": len(chunks),
+                "chunks_added": chunks_added,
                 "total_characters": len(full_text),
-                "pages_processed": page_count
+                "pages_processed": page_count,
+                "index_results": index_results
             }
-            
-        except Exception as chroma_error:
+
+        except Exception as index_error:
             return {
                 "status": "error",
-                "message": f"ChromaDB ekleme hatası: {chroma_error}"
+                "message": f"Vektör DB ekleme hatası: {index_error}"
             }
         
     except Exception as e:
@@ -307,17 +402,47 @@ async def uploadPdf(file: UploadFile = File(...)) -> Dict[str, Any]:
                 "message": "Sadece PDF dosyaları yüklenebilir"
             }
         
-        file_path = os.path.join(PDF_UPLOAD_DIR, file.filename)
+        pdf_adi = safe_pdf_filename(file.filename)
+        file_path = os.path.join(PDF_UPLOAD_DIR, pdf_adi)
         
         
         with open(file_path, "wb") as buffer:
             contents = await file.read()
             buffer.write(contents)
-        
+        save_pdf_to_db(pdf_adi, contents)
+
+        try:
+            pdf_reader = PdfReader(io.BytesIO(contents))
+            page_count = len(pdf_reader.pages)
+            full_text = ""
+            for page_num, page in enumerate(pdf_reader.pages, 1):
+                text = page.extract_text()
+                full_text += text + f"\n---PAGE {page_num}---\n"
+
+            if not full_text.strip():
+                return {
+                    "status": "error",
+                    "message": "PDF kaydedildi ama metin çıkarılamadı",
+                    "filename": pdf_adi
+                }
+
+            chunks_added = upsert_default_chroma_chunks(pdf_adi, full_text)
+            index_results = index_document_for_all_scenarios(pdf_adi, full_text)
+        except Exception as index_error:
+            return {
+                "status": "error",
+                "message": f"PDF kaydedildi ama vektör DB ekleme hatası: {index_error}",
+                "filename": pdf_adi
+            }
+
         return {
             "status": "success",
-            "message": f"{file.filename} başarıyla yüklendi",
-            "filename": file.filename
+            "message": pdf_processed_message(pdf_adi, index_results),
+            "filename": pdf_adi,
+            "chunks_added": chunks_added,
+            "total_characters": len(full_text),
+            "pages_processed": page_count,
+            "index_results": index_results
         }
     except Exception as e:
         import traceback

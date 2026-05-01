@@ -3,7 +3,6 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import chromadb
-from chromadb.utils import embedding_functions
 
 app = FastAPI()
 
@@ -17,12 +16,9 @@ app.add_middleware(
 
 # ChromaDB bağlantısı
 client = chromadb.PersistentClient(path="../../yerel_veritabani")
-ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
 collection = client.get_or_create_collection(
     name="dokumanlarim",
-    embedding_function=ef
+    metadata={"hnsw:space": "cosine"},
 )
 
 class GirdiVerisi(BaseModel):
