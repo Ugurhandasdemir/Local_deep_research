@@ -156,18 +156,21 @@ MODELS = {
     "mpnet_multi":        {"path": os.path.join(MODELS_DIR, "mpnet_multi", "model"), "dim": 768},
     "e5_base":            {"path": os.path.join(MODELS_DIR, "e5_base", "model"),     "dim": 768},
     "bge_squad":          {"path": os.path.join(MODELS_DIR, "bge_squad_model"),      "dim": 1024},
-    "qwen_lora":          {"path": os.path.join(MODELS_DIR, "qwen_lora"),             "dim": 1024},
+    "qwen_lora":          {"path": os.path.join(MODELS_DIR, "qwen_lora"),             "dim": 1024, "batch": 2, "max_seq_len": 128},
     "snowflake_arctic_l": {"path": os.path.join(MODELS_DIR, "snowflake-arctic-embed-l-v2.0"), "dim": 1024},
     "all_mini_l6":        {"path": os.path.join(MODELS_DIR, "all_mini_l6_v2"),         "dim": 384},
+    "bge_m3_fine":        {"path": os.path.join(MODELS_DIR, "bge-m3-fine"),         "dim": 1024},
+
 
     # --- Base (egitilmemis) HuggingFace versiyonlari ---
     "e5_small_base":          {"path": "intfloat/multilingual-e5-small",                   "dim": 384},
     "mpnet_multi_base":       {"path": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", "dim": 768},
     "e5_base_base":           {"path": "intfloat/multilingual-e5-base",                    "dim": 768},
     "bge_squad_base":         {"path": "BAAI/bge-large-en-v1.5",                           "dim": 1024},
-    "qwen_lora_base":         {"path": "Qwen/Qwen3-Embedding-0.6B",                        "dim": 1024},
+    "qwen_lora_base":         {"path": "Qwen/Qwen3-Embedding-0.6B",                        "dim": 1024, "batch": 2, "max_seq_len": 128},
     "snowflake_arctic_l_base": {"path": "Snowflake/snowflake-arctic-embed-l-v2.0",         "dim": 1024},
     "all_mini_l6_base":       {"path": "sentence-transformers/all-MiniLM-L6-v2",           "dim": 384},
+    "bge_m3_base":            {"path": "BAAI/bge-m3",                                       "dim": 1024},
 
     # --- Diger HuggingFace hazir modeller ---
     "minilm_l12":         {"path": "sentence-transformers/all-MiniLM-L12-v2",                     "dim": 384},
@@ -354,6 +357,83 @@ def qual_cache_paths(model_key):
 def qual_encoding_cached(model_key):
     qp = qual_cache_paths(model_key)
     return all(os.path.exists(qp[k]) for k in ("corpus", "queries", "meta"))
+
+
+def _resolve_encode_device(cfg):
+    """Model config 'device' override veya cuda varsa cuda, yoksa cpu."""
+    import torch
+    forced = cfg.get("device")
+    if forced:
+        if forced == "cuda" and not torch.cuda.is_available():
+            return "cpu"
+        return forced
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def encode_with_fallback(cfg, texts_list, show_progress=True):
+    """
+    SentenceTransformer encode + OOM fallback.
+      - cfg: MODELS[key] (path, dim, optional: device, batch, max_seq_len)
+      - texts_list: [list[str], list[str], ...]  birden fazla grup
+    Donen: aynı sirada [np.ndarray, ...] + kullanilan device + batch.
+    OOM (CUDA) yakalanirsa CPU'ya dusup yeniden dener.
+    """
+    from sentence_transformers import SentenceTransformer
+    import torch
+
+    device = _resolve_encode_device(cfg)
+    batch = int(cfg.get("batch", ENCODE_BATCH))
+    max_seq = cfg.get("max_seq_len")
+
+    def _load(dev):
+        m = SentenceTransformer(cfg["path"], device=dev)
+        if max_seq:
+            try:
+                m.max_seq_length = int(max_seq)
+            except Exception:
+                pass
+        return m
+
+    def _encode_all(m, b):
+        out = []
+        for i, texts in enumerate(texts_list):
+            embs = m.encode(
+                texts, batch_size=b, convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=(show_progress and i == 0),
+            )
+            out.append(embs)
+        return out
+
+    # Cihaz/Bellek konfigurasyonu (OOM riskli modeller icin parcalanma azaltma)
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+    cur_batch = batch
+    last_err = None
+    out = None
+    while cur_batch >= 1:
+        try:
+            model = _load(device)
+            out = _encode_all(model, cur_batch)
+            del model
+            free_memory()
+            return out, device, cur_batch
+        except torch.cuda.OutOfMemoryError as e:
+            last_err = e
+            logger.warning(f"CUDA OOM batch={cur_batch}: {e}. Batch yariya inip tekrar.")
+            try:
+                del model
+            except Exception:
+                pass
+            free_memory()
+            if cur_batch == 1:
+                break
+            cur_batch = max(1, cur_batch // 2)
+        except Exception as e:
+            logger.exception(f"Encode hata: {e}")
+            free_memory()
+            raise
+    raise RuntimeError(f"CUDA OOM batch=1'de bile cozulemedi: {last_err}")
 
 
 def compute_quality_metrics(retrieved_ids_list, gt_list, ks=(1, 10, 100)):
@@ -924,24 +1004,47 @@ def worker_main(args):
     threading.Thread(target=_heartbeat, daemon=True).start()
     logger.info(f"Worker basladi PID={os.getpid()} phase={args.phase} model={args.model} db={args.db} mode={args.mode}")
 
+    # Bellek takibi (RAM rss + CUDA peak)
+    try:
+        import psutil
+        _proc = psutil.Process(os.getpid())
+    except Exception:
+        _proc = None
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+    except Exception:
+        torch = None
+
+    def _peak_mem():
+        ram_mb = 0.0
+        vram_gb = 0.0
+        try:
+            if _proc is not None:
+                ram_mb = _proc.memory_info().rss / (1024 * 1024)
+        except Exception:
+            pass
+        try:
+            if torch is not None and torch.cuda.is_available():
+                vram_gb = torch.cuda.max_memory_allocated() / 1e9
+        except Exception:
+            pass
+        return ram_mb, vram_gb
+
     cp = cache_paths(args.model, args.mode)
     result = {"status": "error", "error": "unknown"}
     try:
         if args.phase == "encode":
             cfg = MODELS[args.model]
-            from sentence_transformers import SentenceTransformer
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info(f"Encode: {args.model} (device={device}) path={cfg['path']}")
+            logger.info(f"Encode: {args.model} path={cfg['path']} "
+                        f"device_override={cfg.get('device')} batch={cfg.get('batch', ENCODE_BATCH)}")
             docs = load_documents(limit=20 if args.mode == "test" else None)
             texts = [d["text"] for d in docs]
-            model = SentenceTransformer(cfg["path"], device=device)
-            doc_embs = model.encode(texts, batch_size=ENCODE_BATCH, convert_to_numpy=True,
-                                    normalize_embeddings=True, show_progress_bar=True)
-            query_embs = model.encode(TEST_QUERIES, batch_size=ENCODE_BATCH, convert_to_numpy=True,
-                                      normalize_embeddings=True, show_progress_bar=False)
-            del model
-            free_memory()
+            (doc_embs, query_embs), used_dev, used_batch = encode_with_fallback(
+                cfg, [texts, TEST_QUERIES], show_progress=True
+            )
+            logger.info(f"Encode bitti device={used_dev} batch={used_batch}")
             np.save(cp["docs"], doc_embs)
             np.save(cp["queries"], query_embs)
             with open(cp["meta"], "w", encoding="utf-8") as f:
@@ -973,22 +1076,15 @@ def worker_main(args):
 
         elif args.phase == "encode_qual":
             cfg = MODELS[args.model]
-            from sentence_transformers import SentenceTransformer
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info(f"EncodeQual: {args.model} (device={device})")
+            logger.info(f"EncodeQual: {args.model} "
+                        f"device_override={cfg.get('device')} batch={cfg.get('batch', ENCODE_BATCH)}")
             corpus, queries, qrels = load_squad_quality()
             corpus_texts = [c["text"] for c in corpus]
             query_texts = [q["text"] for q in queries]
-            model = SentenceTransformer(cfg["path"], device=device)
-            corpus_embs = model.encode(corpus_texts, batch_size=ENCODE_BATCH,
-                                       convert_to_numpy=True, normalize_embeddings=True,
-                                       show_progress_bar=True)
-            query_embs = model.encode(query_texts, batch_size=ENCODE_BATCH,
-                                      convert_to_numpy=True, normalize_embeddings=True,
-                                      show_progress_bar=False)
-            del model
-            free_memory()
+            (corpus_embs, query_embs), used_dev, used_batch = encode_with_fallback(
+                cfg, [corpus_texts, query_texts], show_progress=True
+            )
+            logger.info(f"EncodeQual bitti device={used_dev} batch={used_batch}")
             qp = qual_cache_paths(args.model)
             np.save(qp["corpus"], corpus_embs)
             np.save(qp["queries"], query_embs)
@@ -1041,10 +1137,19 @@ def worker_main(args):
         logger.exception(f"Worker hata: {e}")
         result = {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
+    # Bellek peak'i her durumda result'a ekle
+    ram_mb, vram_gb = _peak_mem()
+    if isinstance(result, dict):
+        result["peak_ram_mb"] = round(ram_mb, 1)
+        result["peak_vram_gb"] = round(vram_gb, 3)
+
     if args.result_file:
         with open(args.result_file, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, default=str)
-    logger.info(f"Worker bitti status={result.get('status')}")
+    logger.info(
+        f"Worker bitti status={result.get('status')} "
+        f"peak_ram={ram_mb:.0f}MB peak_vram={vram_gb:.2f}GB"
+    )
 
 
 # ---------------------------------------------------------------
@@ -1086,9 +1191,15 @@ def is_search_done(results, db, model):
     s = results.get("search", {}).get(db, {}).get(model)
     if not isinstance(s, dict) or not s:
         return False
-    if "error" in s and not any(isinstance(v, dict) and "avg_time" in v for v in s.values()):
+    if "error" in s and not any(
+        isinstance(v, dict) and "avg_time" in v
+        for k, v in s.items() if not str(k).startswith("__")
+    ):
         return False
-    return any(isinstance(v, dict) and "avg_time" in v for v in s.values())
+    return any(
+        isinstance(v, dict) and "avg_time" in v
+        for k, v in s.items() if not str(k).startswith("__")
+    )
 
 
 def is_qual_write_done(results, db, model):
@@ -1187,6 +1298,8 @@ def orchestrate(mode, reset=False):
 
     # ASAMA 1: encode (cache yoksa) + write (her DB)
     print_header("ASAMA 1: ENCODE + WRITE")
+    encode_peaks = results.setdefault("encode_peaks", {})        # {model: {ram_mb, vram_gb}}
+    encode_qual_peaks = results.setdefault("encode_qual_peaks", {})
     for model_key, cfg in MODELS.items():
         pending_writes = [db for db in DBS if not is_write_done(results, db, model_key)]
         if not pending_writes:
@@ -1202,6 +1315,10 @@ def orchestrate(mode, reset=False):
                 save_json(results)
                 update_excel(results)
                 continue
+            encode_peaks[model_key] = {
+                "peak_ram_mb": r.get("peak_ram_mb", 0.0),
+                "peak_vram_gb": r.get("peak_vram_gb", 0.0),
+            }
         else:
             logger.info(f"[{model_key}] embedding cache hit")
 
@@ -1213,8 +1330,13 @@ def orchestrate(mode, reset=False):
                     "time": r["time"],
                     "record_count": r["record_count"],
                     "dim": r["dim"],
+                    "peak_ram_mb": r.get("peak_ram_mb", 0.0),
+                    "peak_vram_gb": r.get("peak_vram_gb", 0.0),
                 }
-                logger.info(f"[{model_key}/{db}] write OK {r['time']:.2f}s")
+                logger.info(
+                    f"[{model_key}/{db}] write OK {r['time']:.2f}s "
+                    f"ram={r.get('peak_ram_mb', 0):.0f}MB vram={r.get('peak_vram_gb', 0):.2f}GB"
+                )
             else:
                 results["write"][db][model_key] = {"status": "error", "error": r.get("error", "unknown")}
                 logger.error(f"[{model_key}/{db}] write HATA: {r.get('error')}")
@@ -1235,10 +1357,17 @@ def orchestrate(mode, reset=False):
 
             r = spawn_worker("search", model_key, mode, db=db)
             if r.get("status") == "ok":
-                results["search"][db][model_key] = r["algorithms"]
+                bucket = dict(r["algorithms"])
+                bucket["__peak_ram_mb"] = r.get("peak_ram_mb", 0.0)
+                bucket["__peak_vram_gb"] = r.get("peak_vram_gb", 0.0)
+                results["search"][db][model_key] = bucket
                 for algo, perf in r["algorithms"].items():
                     if isinstance(perf, dict) and "avg_time" in perf:
                         logger.info(f"[{model_key}/{db}] {algo:<22} {perf['avg_time']*1000:8.3f} ms")
+                logger.info(
+                    f"[{model_key}/{db}] search ram={r.get('peak_ram_mb', 0):.0f}MB "
+                    f"vram={r.get('peak_vram_gb', 0):.2f}GB"
+                )
             else:
                 results["search"][db][model_key] = {"error": r.get("error", "unknown")}
                 logger.error(f"[{model_key}/{db}] search HATA: {r.get('error')}")
@@ -1265,6 +1394,10 @@ def orchestrate(mode, reset=False):
                 save_json(results)
                 update_excel(results)
                 continue
+            encode_qual_peaks[model_key] = {
+                "peak_ram_mb": r.get("peak_ram_mb", 0.0),
+                "peak_vram_gb": r.get("peak_vram_gb", 0.0),
+            }
             logger.info(f"[{model_key}] encode_qual OK corpus={r.get('corpus_count')} q={r.get('query_count')}")
         else:
             if pending_qwrites or pending_qsearch:
@@ -1279,6 +1412,8 @@ def orchestrate(mode, reset=False):
                     "time": r["time"],
                     "corpus_count": r["corpus_count"],
                     "dim": r["dim"],
+                    "peak_ram_mb": r.get("peak_ram_mb", 0.0),
+                    "peak_vram_gb": r.get("peak_vram_gb", 0.0),
                 }
                 logger.info(f"[{model_key}/{db}] quality_write OK {r['time']:.2f}s")
             else:
@@ -1299,6 +1434,8 @@ def orchestrate(mode, reset=False):
                 results["quality_search"][db][model_key] = {
                     "status": "ok",
                     "metrics": r["metrics"],
+                    "peak_ram_mb": r.get("peak_ram_mb", 0.0),
+                    "peak_vram_gb": r.get("peak_vram_gb", 0.0),
                 }
                 m = r["metrics"]
                 logger.info(
@@ -1581,6 +1718,110 @@ def build_excel(results):
         ws.column_dimensions["A"].width = 18
         for c_idx in range(2, 2 + len(metric_cols)):
             ws.column_dimensions[openpyxl.utils.get_column_letter(c_idx)].width = 13
+
+    # 6) PERFORMANS METRIKLERI (computed: QPS, p99 proxy, write rec/s, VRAM peak)
+    comp = results.get("computed", {})
+
+    # 6a) Write throughput
+    ws = wb.create_sheet("Write Throughput")
+    ws["A1"] = "YAZMA HIZI (kayit/saniye) + VRAM Peak (GB)"
+    ws["A1"].font = Font(bold=True, size=14)
+    headers = ["Model", "DB", "kayit/sn", "sure(s)", "kayit", "vram_peak_gb"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=3, column=i, value=h)
+        c.fill = header_fill; c.font = header_font; c.alignment = center; c.border = border
+    row = 4
+    for model_key in MODELS:
+        for db in DBS:
+            wd = results.get("write", {}).get(db, {}).get(model_key, {})
+            if wd.get("status") != "ok":
+                continue
+            t = wd.get("time"); rc = wd.get("record_count")
+            if not (isinstance(t, (int, float)) and t > 0 and rc):
+                continue
+            comp_w = comp.get("write", {}).get(db, {}).get(model_key, {})
+            vals = [model_key, db,
+                    round(rc / t, 1), round(t, 3), rc,
+                    round(comp_w.get("vram_peak_gb", 0.0), 2)]
+            for j, v in enumerate(vals, 1):
+                cell = ws.cell(row=row, column=j, value=v)
+                cell.alignment = center; cell.border = border
+            row += 1
+    ws.column_dimensions["A"].width = 20
+    ws.column_dimensions["B"].width = 12
+    for c in ["C", "D", "E", "F"]:
+        ws.column_dimensions[c].width = 14
+
+    # 6b) Search QPS / p99 proxy
+    ws = wb.create_sheet("Search QPS p99")
+    ws["A1"] = "ARAMA QPS + p99 (max proxy) — TEST_RUNS=10 oldugu icin p99 ≈ max_time"
+    ws["A1"].font = Font(bold=True, size=14)
+    headers = ["Sira", "DB", "Model", "Algoritma",
+               "QPS", "avg_ms", "p50_ms", "p95_ms", "p99_proxy_ms", "vram_peak_gb"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=3, column=i, value=h)
+        c.fill = header_fill; c.font = header_font; c.alignment = center; c.border = border
+
+    rows_qps = []
+    for db in DBS:
+        for model_key, algos in comp.get("search", {}).get(db, {}).items():
+            if not isinstance(algos, dict):
+                continue
+            vram = algos.get("__vram_peak_gb", 0.0)
+            for algo, m in algos.items():
+                if algo.startswith("__") or not isinstance(m, dict):
+                    continue
+                rows_qps.append({
+                    "db": db, "model": model_key, "algo": algo,
+                    "qps": m.get("qps", 0.0),
+                    "avg": m.get("avg_ms", 0.0),
+                    "p50": m.get("p50_ms", 0.0),
+                    "p95": m.get("p95_ms", 0.0),
+                    "p99": m.get("p99_proxy_ms", 0.0),
+                    "vram": vram,
+                })
+    rows_qps.sort(key=lambda x: x["qps"], reverse=True)
+
+    row = 4
+    for i, r in enumerate(rows_qps, 1):
+        vals = [i, r["db"], r["model"], r["algo"],
+                round(r["qps"], 1), round(r["avg"], 3),
+                round(r["p50"], 3), round(r["p95"], 3), round(r["p99"], 3),
+                round(r["vram"], 2)]
+        for j, v in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=j, value=v)
+            cell.alignment = center; cell.border = border
+            if i <= 3:
+                cell.fill = gold
+        row += 1
+    ws.column_dimensions["A"].width = 6
+    for c in ["B", "C", "D"]:
+        ws.column_dimensions[c].width = 18
+    for c in ["E", "F", "G", "H", "I", "J"]:
+        ws.column_dimensions[c].width = 13
+
+    # 6c) Encode VRAM (model bazli, encode + encode_qual)
+    ws = wb.create_sheet("Encode VRAM")
+    ws["A1"] = "ENCODE FAZI VRAM PEAK (GB) — log HEARTBEAT'ten"
+    ws["A1"].font = Font(bold=True, size=14)
+    headers = ["Model", "encode (full corpus)", "encode_qual (SQuAD)"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=3, column=i, value=h)
+        c.fill = header_fill; c.font = header_font; c.alignment = center; c.border = border
+    enc = comp.get("vram_peak_gb", {}).get("encode", {})
+    encq = comp.get("vram_peak_gb", {}).get("encode_qual", {})
+    row = 4
+    for model_key in MODELS:
+        vals = [model_key,
+                round(enc.get(model_key, 0.0), 2),
+                round(encq.get(model_key, 0.0), 2)]
+        for j, v in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=j, value=v if v else "-")
+            cell.alignment = center; cell.border = border
+        row += 1
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 22
 
     wb.save(OUTPUT_XLSX)
 
