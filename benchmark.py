@@ -189,7 +189,8 @@ MODELS = {
 
 DBS = ["milvus", "qdrant", "chromadb", "lancedb", "weaviate"]
 
-TEST_QUERIES = [
+# Statik fallback — SQuAD bulunamazsa kullanilir
+_FALLBACK_QUERIES = [
     "artificial intelligence healthcare applications",
     "machine learning medical diagnosis systems",
     "deep learning neural network architectures",
@@ -203,7 +204,7 @@ TEST_QUERIES = [
 ]
 
 WARMUP_RUNS = 2
-TEST_RUNS = 10
+TEST_RUNS = 3      # 1000 sorgu x 3 run = 3000 olcum, p99 stabil
 ENCODE_BATCH = 32
 WRITE_BATCH = 32   # chromadb/lancedb OOM riskini dusurmek icin kucuk
 
@@ -212,6 +213,40 @@ SQUAD_FILE = os.path.join(BASE_DIR, "CUSTOM_DATASET", "squad_dataset.json")
 QUALITY_QUERY_SAMPLE = 1000     # akademik raporlar icin yeterli ornek
 QUALITY_TOP_K = 100             # max retrieve, sonra @1/@10/@100 hesapla
 QUALITY_SAMPLE_SEED = 42
+
+# --- HIZ BASARIMI (QPS / p50 / p95 / p99) ---
+PERF_QUERY_SAMPLE = 1000        # akademik QPS/p99 icin 1000 sorgu
+PERF_SAMPLE_SEED = 1337
+
+
+def load_perf_queries(n=PERF_QUERY_SAMPLE, seed=PERF_SAMPLE_SEED):
+    """SQuAD'den N adet sorgu yukle. Bulamazsa fallback listeyi dondur."""
+    if not os.path.exists(SQUAD_FILE):
+        return list(_FALLBACK_QUERIES)
+    try:
+        with open(SQUAD_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        qs = []
+        for article in data.get("data", []):
+            for para in article.get("paragraphs", []):
+                for qa in para.get("qas", []):
+                    if qa.get("is_impossible", False):
+                        continue
+                    q = (qa.get("question") or "").strip()
+                    if q:
+                        qs.append(q)
+        if not qs:
+            return list(_FALLBACK_QUERIES)
+        import random
+        rng = random.Random(seed)
+        if len(qs) > n:
+            qs = rng.sample(qs, n)
+        return qs
+    except Exception:
+        return list(_FALLBACK_QUERIES)
+
+
+TEST_QUERIES = load_perf_queries()
 
 OUTPUT_JSON = os.path.join(BASE_DIR, "multi_model_benchmark_results.json")
 OUTPUT_XLSX = os.path.join(BASE_DIR, "multi_model_benchmark_results.xlsx")

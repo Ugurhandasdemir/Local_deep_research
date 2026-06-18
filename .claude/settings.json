@@ -12,7 +12,14 @@
       "Bash(python3 -c \"import peft; print\\('peft:', peft.__version__\\)\")",
       "Bash(git pull *)",
       "Bash(git stash *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(python -c ' *)",
+      "Bash(cp multi_model_benchmark_results.json multi_model_benchmark_results.json.bak.search)",
+      "Bash(unzip -p deepresearch_makale_ieee.docx word/document.xml)",
+      "Read(//tmp/docx_edit/word/**)",
+      "Bash(grep -oE \"all-MiniLM-L6-v2[^<]{0,500}\" /tmp/docx_edit/word/document.xml)",
+      "Bash(grep -oE \"MiniLM, DeBERTa[^<]{0,300}\" /tmp/docx_edit/word/document.xml)",
+      "Bash(sudo dpkg -i /home/ugo/Downloads/zoom_amd64.deb)"
     ],
     "additionalDirectories": [
       "/home/ugo/.claude/projects/-home-ugo-Documents-Python-bitirememe-projesi"
