@@ -57,6 +57,7 @@ agents.md
 data/*
 !data/VERI-TARIFI.md
 !data/LISANSLAR.md
+!data/indir.py
 !data/listeler/
 *.pdf
 *.db
