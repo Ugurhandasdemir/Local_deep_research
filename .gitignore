@@ -58,6 +58,7 @@ data/*
 !data/VERI-TARIFI.md
 !data/LISANSLAR.md
 !data/indir.py
+!data/scifact_temiz.py
 !data/listeler/
 *.pdf
 *.db
