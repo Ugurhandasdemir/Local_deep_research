@@ -13,7 +13,7 @@ Alanlar: `deney`, `makale`, `kod`, `repo`. Yeni madde en son kullanılan numarad
 
 ## Deney ve ölçüm
 
-- [ ] **Y-01** [deney] SQuAD setini paragraf bazında train/dev/test olarak ayır (bir paragraf tek tarafta kalsın), fine-tune'u yalnız train ile yeniden yap, sonuçları yalnız test üzerinde raporla. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/incelemeler/2026-11-07-ugurhan-claude.md#A1
+- [ ] **Y-01** [deney] SQuAD setini paragraf bazında train/dev/test olarak ayır (bir paragraf tek tarafta kalsın), fine-tune'u yalnız train ile yeniden yap, sonuçları yalnız test üzerinde raporla. · ekleyen: Uğurhan (Claude) · sorumlu: Yüksel · kaynak: makale/incelemeler/2026-11-07-ugurhan-claude.md#A1
 - [ ] **Y-02** [deney] Kaliteyi harici bir sette de ölç (BEIR'den SciFact/NFCorpus gibi), sadece kendi SQuAD setimize güvenmeyelim. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: incelemeler#A1
 - [ ] **Y-03** [deney] Base modelleri doğru önekle yeniden encode et: BGE sorgusuna `Represent this sentence for searching relevant passages: `, E5'te `query: ` / `passage: `. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: benchmark.py encode_with_fallback
 - [ ] **Y-04** [deney] Kalite ölçümünü büyük korpusta yap: SQuAD paragraflarını 52.331 chunk'ın içine göm. Şu an kalite korpusu sadece 1.059 paragraf. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: incelemeler#A2
