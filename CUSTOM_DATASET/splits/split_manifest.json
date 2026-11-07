@@ -1,0 +1,36 @@
+{
+  "source": "squad_dataset.json",
+  "seed": 42,
+  "unit": "unique paragraph text",
+  "fractions": {
+    "train": 0.8,
+    "dev": 0.1,
+    "test": 0.1
+  },
+  "total": {
+    "articles": 329,
+    "paragraph_entries": 1621,
+    "unique_contexts": 1059,
+    "questions": 7194
+  },
+  "splits": {
+    "train": {
+      "articles": 329,
+      "paragraph_entries": 1301,
+      "unique_contexts": 847,
+      "questions": 5756
+    },
+    "dev": {
+      "articles": 136,
+      "paragraph_entries": 158,
+      "unique_contexts": 106,
+      "questions": 703
+    },
+    "test": {
+      "articles": 137,
+      "paragraph_entries": 162,
+      "unique_contexts": 106,
+      "questions": 735
+    }
+  }
+}
