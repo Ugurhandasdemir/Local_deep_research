@@ -31,6 +31,8 @@ Alanlar: `deney`, `makale`, `kod`, `repo`. Yeni madde en son kullanılan numarad
 - [ ] **Y-37** [deney] DB hızı, ölçek ve ANN recall testini VectorDBBench'in Cohere 1M setine (768 boyut) taşı. Ground truth exact kNN olsun. Y-05 ve Y-06 bu sette yapılacak. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/kararlar.md#K-01
 - [ ] **Y-38** [deney] Uçtan uca PDF RAG değerlendirmesini UDA'nın akademik PDF kısmında yap. Bizim PDF ayrıştırma + chunk + retrieval + LLM hattımız kullanılsın, Y-08'deki metrikler bu sette ölçülsün. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/kararlar.md#K-01
 - [ ] **Y-39** [deney] Türkçe iddiası makalede kalacaksa TR-MTEB'in retrieval görevlerini (Scifact-TR, NFCorpus-TR, MsMarco-TR) ekle, makine çevirisi olduklarını yaz. Kalmayacaksa Türkçe iddiasını makaleden çıkar. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/kararlar.md#K-01
+- [ ] **Y-41** [deney] Karşılaştırılacak embedding modelleri: Qwen3-Embedding, EmbeddingGemma 2, BGE-M3, Jina Embeddings v3, Multilingual E5 Base. Her biri için Hugging Face kimliği, boyutu (Qwen3-Embedding'in 0.6B/4B/8B sürümleri var) ve lisansı yazılsın. Modelin istediği önek ya da talimat kullanılsın (E5 için `query: `/`passage: `, Qwen3 için sorgu talimatı, bkz. Y-03). Ölçüm Y-36'daki BEIR setlerinde yapılsın. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: Uğurhan'ın model listesi (2026-11-07)
+- [ ] **Y-43** [deney] Karşılaştırılacak yerel LLM'ler (Ollama): Qwen3.5, Gemma 4, Ministral 3. Boyut ve quantization 4 GB VRAM'e göre seçilsin ve tabloya yazılsın. Y-08'deki RAGAS metrikleri ve TTFT ile toplam süre (Y-11) aynı soru setinde ölçülsün. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: Uğurhan'ın model listesi (2026-11-07)
 
 ## Makale
 
@@ -53,6 +55,8 @@ Alanlar: `deney`, `makale`, `kod`, `repo`. Yeni madde en son kullanılan numarad
 - [ ] **Y-24** [kod] Hata durumunda doğru HTTP kodu dönsün (şu an her şey 200 ve `status: error`). · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: main.py
 - [ ] **Y-33** [kod] OOM durumunda gerçekten CPU'ya düş, ya da `encode_with_fallback` docstring'ini ve README'yi düzelt (şu an yalnızca batch küçültülüyor). · ekleyen: Uğurhan (Claude) · sorumlu: — · benchmark.py:408-472
 - [ ] **Y-34** [kod] Flutter: yüklemede `status` alanını kontrol et (hata şu an "başarılı" görünüyor), tüm yanıtlarda `utf8.decode` kullan, isteklere timeout ekle, konuşma geçmişini backend'e gönder. · ekleyen: Uğurhan (Claude) · sorumlu: — · UI/local_deep_research_interface/lib/services/api_services.dart:81-90
+- [ ] **Y-42** [kod] Retrieval hattına reranker aşaması ekle (top-k aday → reranker → LLM) ve şu modelleri karşılaştır: Qwen3-Reranker, Jina Reranker v3, BGE-Reranker-v2-m3, gte-multilingual-reranker-base. Reranker'lı ve reranker'sız nDCG@10 ile gecikme ölçülsün. Bu madde makalede anlatılıp kodda olmayan reranker modülünü de kapatır (Y-12). · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: Uğurhan'ın model listesi (2026-11-07)
+- [ ] **Y-44** [kod] LLM katmanına API ile çalışan sağlayıcılar ekle: Gemini ve EVREN modelleri. Anahtar `.env` dosyasından okunsun, repoya girmesin. Bu modeller yerel olmadığı için belge içeriği dışarıya gider, makalede yalnızca karşılaştırma tabanı (üst sınır) olarak ayrı raporlansın, "tamamen yerel" iddiasının içine katılmasın. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: Uğurhan'ın model listesi (2026-11-07)
 
 ## Repo
 
