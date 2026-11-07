@@ -24,6 +24,9 @@ Alanlar: `deney`, `makale`, `kod`, `repo`. Yeni madde en son kullanılan numarad
 - [ ] **Y-09** [deney] BM25 ve hibrit (alpha taraması) için nDCG ölç. Makalenin "semantik arama anahtar kelimeden iyidir" iddiası şu an sayıyla desteklenmiyor. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: incelemeler#B
 - [ ] **Y-10** [deney] Donanım ve sürüm tablosu çıkar: CPU, RAM, GPU, disk, OS, her DB'nin ve kütüphanenin sürümü, Docker kaynak limitleri. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: incelemeler#B
 - [ ] **Y-11** [deney] Gerçek kullanıcı gecikmesini ölç: sorgu encode + arama + LLM (TTFT ve toplam süre). Şu an sorgu vektörleri önceden cache'leniyor. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: incelemeler#C
+- [ ] **Y-29** [deney] Soru setini tekilleştir (1.405 birebir kopya var), birden fazla paragrafa uyan 100 soru metnini ve bağlama bağımlı soruları ("this study", "the article") ele ya da yeniden yazdır, 100-200 soruyu iki kişi elle doğrulasın. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/incelemeler/2026-11-07-ugurhan-claude-kod-2.md#1
+- [ ] **Y-31** [deney] Bellek ölçümünü düzelt: şu an yalnızca istemci sürecinin iş sonundaki RSS değeri okunuyor, Qdrant/Weaviate sunucu belleği hiç ölçülmüyor. `docker stats` ve örneklemeyle gerçek tepe değeri al. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/incelemeler/2026-11-07-ugurhan-claude-kod-2.md#2
+- [ ] **Y-32** [deney] Yazma süresine indeksin hazır olma süresini dahil et ya da ikisini ayrı ölç (Chroma indeksi senkron kuruyor, Qdrant arka planda). · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/incelemeler/2026-11-07-ugurhan-claude-kod-2.md#2
 
 ## Makale
 
@@ -35,6 +38,7 @@ Alanlar: `deney`, `makale`, `kod`, `repo`. Yeni madde en son kullanılan numarad
 - [ ] **Y-17** [makale] Tablo ve rakam tutarlılığı: 5501,4 / 5510,4, LanceDB QPS hücresinde "2.Oca", 28 / 26 model, tur sayısı (kod 3, md 10, makale 5). · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: incelemeler#A5
 - [ ] **Y-18** [makale] Dil ve şablon: gövde tek dilde olsun, bölüm başlıklarındaki İ harflerini düzelt ("INTRODUCTİON"), yazım hatalarını gider (Chorame, embbeding), bölüm sırasını ve tablo/şekil numaralarını düzelt. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: incelemeler#B
 - [ ] **Y-19** [makale] İlgili çalışmalar bölümüne vektör DB benchmark literatürünü ekle (ANN-Benchmarks, VectorDBBench, BEIR, vektör DB anketleri) ve katkımızı bunlara göre konumlandır. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: incelemeler#E
+- [ ] **Y-30** [makale] Soru setinin ministral-3:8b ile sentetik üretildiğini ve üretim protokolünü (`CUSTOM_DATASET/text_search.py`) makalede açıkça yaz. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/incelemeler/2026-11-07-ugurhan-claude-kod-2.md#1
 
 ## Kod
 
@@ -43,6 +47,8 @@ Alanlar: `deney`, `makale`, `kod`, `repo`. Yeni madde en son kullanılan numarad
 - [ ] **Y-22** [kod] PDF güncellendiğinde eski chunk'lar silinsin, Weaviate yazımı batch ile yapılsın, DB bağlantıları her aramada yeniden açılmasın. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: vector_indexes.py:230-348
 - [ ] **Y-23** [kod] Retrieval: minimum benzerlik eşiği, aynı dosyadan gelen sonuçların tekilleştirilmesi, chunk metadata'sına sayfa numarası eklenmesi, bağlamın `num_ctx` içine sığdığının token bazında kontrolü. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: vector_indexes.py, main.py:113-146
 - [ ] **Y-24** [kod] Hata durumunda doğru HTTP kodu dönsün (şu an her şey 200 ve `status: error`). · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: main.py
+- [ ] **Y-33** [kod] OOM durumunda gerçekten CPU'ya düş, ya da `encode_with_fallback` docstring'ini ve README'yi düzelt (şu an yalnızca batch küçültülüyor). · ekleyen: Uğurhan (Claude) · sorumlu: — · benchmark.py:408-472
+- [ ] **Y-34** [kod] Flutter: yüklemede `status` alanını kontrol et (hata şu an "başarılı" görünüyor), tüm yanıtlarda `utf8.decode` kullan, isteklere timeout ekle, konuşma geçmişini backend'e gönder. · ekleyen: Uğurhan (Claude) · sorumlu: — · UI/local_deep_research_interface/lib/services/api_services.dart:81-90
 
 ## Repo
 
@@ -50,3 +56,4 @@ Alanlar: `deney`, `makale`, `kod`, `repo`. Yeni madde en son kullanılan numarad
 - [ ] **Y-26** [repo] Büyük dosyaları repodan çıkar: kökteki ve `CUSTOM_DATASET/` içindeki iki ayrı `metin_dosyasi.json` (24 MB'lık kopyalar), `DB/` verileri, `.~lock` dosyası. Yerlerine indirme betiği koy. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: repo kökü
 - [ ] **Y-27** [repo] `.claude/settings.json` kişisel izinler içeriyor (`git push *`, `sudo dpkg`, kişisel yollar). Repodan çıkarılsın, `.gitignore`'a eklensin. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: .claude/settings.json
 - [ ] **Y-28** [repo] En az ingest ve search için `pytest` testleri yaz, lisans dosyası ekle. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: repo kökü
+- [ ] **Y-35** [repo] `UI/backend/` (eski backend) ve `DB/*` ilk deney betiklerini `docs/arsiv/` altına taşı ya da sil. · ekleyen: Uğurhan (Claude) · sorumlu: — · kaynak: makale/incelemeler/2026-11-07-ugurhan-claude-kod-2.md#4
