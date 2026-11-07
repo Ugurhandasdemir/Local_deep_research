@@ -30,3 +30,19 @@ Kaynaklar:
 - TR-MTEB: https://aclanthology.org/2025.findings-emnlp.471/
 - pdfQA (alternatif): https://arxiv.org/abs/2601.02285
 - PMC OA (C aşaması için): https://catalog.data.gov/dataset/pubmed-central-open-access-subset-pmc-oa
+
+## K-02 · 2026-11-07 · Ortak veri tarifi ve setlerin rolleri
+
+- **Karar veren:** Yüksel (taslak ve denetim: Claude, 4 alt agent). Uğurhan ve Hakan itiraz edecekse `tartışma` etiketiyle issue açsın.
+- **Karar:** Üç kişi aynı veriyi, aynı bölmeyi ve aynı ölçüm kuralını kullanır. Tarif `data/VERI-TARIFI.md` dosyasındadır, sürümlüdür, değişirse eski sürüm silinmez. Her sonuç tarif sürümünü yazar.
+- **Roller (tarif sürüm 1):**
+  - SciFact: fine-tune train + test, sızıntı temizliğiyle (test pozitiflerinin %64'ü train'de de pozitif).
+  - NFCorpus: yalnız zero-shot test (test pozitiflerinin %99,6'sı train'de var).
+  - TREC-COVID: yalnız held-out test.
+  - SciFact-TR ve NFCorpus-TR: yalnız Türkçe test, makine çevirisi, temizlikle, kendi betiğimizle.
+  - Cohere 1M: yalnız DB hız/ölçek/ANN recall (metin yok, kendi modellerimizle uyumsuz).
+  - UDA PaperTab + PaperText: yalnız uçtan uca PDF RAG testi (train split'i yok).
+- **K-01'e etkisi:** MsMarco-TR kapsamdan çıkarıldı (Y-39 yalnız Scifact-TR ve NFCorpus-TR ile uygulanır): test sorgularının 4.421'i train'de de var, BEIR MS MARCO değil, lisansı kısıtlı. K-01'in diğer kararları geçerli.
+- **Gerekçe:** Kanıtlar `data/VERI-TARIFI.md` içinde, her biri ölçüldü / kaynaktan okundu / doğrulanamadı etiketiyle. Denetim alt agent'larla yapıldı, bulgular betikle yeniden üretilene kadar makalede "kanıtlandı" diye yazılmaz.
+- **Açık:** SciFact train küçük (809 sorgu). Daha büyük fine-tune verisi gerekirse yeni karar. Lisans doğrulamaları Y-56.
+- **Yeni maddeler:** Y-54..Y-58.
