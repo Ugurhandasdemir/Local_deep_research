@@ -4,7 +4,8 @@
 Karar: `makale/kararlar.md` K-02. Bu dosya o kararın uygulama tarifidir.
 
 - Tarif değişirse eski sürüm silinmez. Aşağıya yeni sürüm ve gerekçe eklenir. Her sonuç hangi tarif sürümüyle alındığını yazar.
-- Veriler repoya ve vault'a commit'lenmez. Yalnızca indirme komutu ve sağlama değeri buradadır (indirme betiği: Y-40).
+- Veriler repoya ve vault'a commit'lenmez. Yalnızca indirme komutu ve sağlama değeri buradadır.
+- İndirme: `python3 data/indir.py --liste` (betik bu dosyadaki sürüm, revision ve sağlama değerlerini kullanır; birini değiştirirsen ikisini birlikte güncelle). Lisanslar: `data/LISANSLAR.md`.
 - Aşağıdaki sayılar ve bulgular 2026-11-07 tarihli bir denetim koşusundan gelir (alt agent'lar, Claude). Her satırda
   **[ö]** ölçüldü, **[k]** kaynaktan okundu, **[d]** doğrulanamadı. Betikle yeniden üretilene kadar makaleye "kanıtlandı" diye yazılmaz.
 
@@ -91,6 +92,8 @@ for repo, rev in [
 B=https://assets.zilliz.com/benchmark/cohere_medium_1m
 for f in test.parquet neighbors.parquet shuffle_train.parquet; do curl -fLO -C - $B/$f; done
 # shuffle_train.parquet 3.134.418.448 B, ETag aa5dee664dc87b3e416c9863723a0ba4-374 (2023-06-09)
+# sha256 (indir.py ile ölçüldü, 2026-11-07): test.parquet a2ec76c907da22e5533ce31c1105e4fd4d3c4597915a7771d5e41897a95ecbed
+#                                          neighbors.parquet 30e7467766be3e2a6b167df16388a4a35e38fa6cc9e593fb659cce81ffde0940
 # alternatif: pip install "vectordb-bench==2.0.0"   (VectorDBBench HEAD 9782fde, MIT)
 ```
 
