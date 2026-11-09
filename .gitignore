@@ -54,7 +54,10 @@ agents.md
 # -----------------------------------------------------------------------------
 # Project data, uploads and generated benchmark outputs
 # -----------------------------------------------------------------------------
-data/
+data/*
+!data/VERI-TARIFI.md
+!data/LISANSLAR.md
+!data/listeler/
 *.pdf
 *.db
 *.sqlite
