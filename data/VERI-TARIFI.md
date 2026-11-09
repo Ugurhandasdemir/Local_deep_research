@@ -59,6 +59,9 @@ train ve test'te ortak [ö]. "SciFact-temiz-train" şöyle üretilir ve çıkar�
 2. Test ile aynı metne sahip train sorguları çıkarılır.
 3. Test bölümü değiştirilmez. Raporda iki sonuç birlikte verilir: tam test ve "181 örtüşen doküman çıkarılmış test".
 
+Uygulama: `python3 data/scifact_temiz.py` (kayıt: `data/listeler/scifact_temiz_v1.json`; `--kontrol` ile makinedeki sonuç kayıtla karşılaştırılır).
+Ölçülen sonuç [ö]: train 919 satır / 809 sorgu → **624 / 550**; temiz test 339 satır / 300 sorgu → **123 / 107**. 181 ortak dokümanın 295 train ve 216 test satırı çıktı, 2 sorgu metni ortak çıktı. **Temiz test küçüktür (107 sorgu):** küçük farkları yorumlama, tam test sonucunu ana sonuç, temiz testi sızıntı kontrolü olarak ver.
+
 **NFCorpus:** yalnız zero-shot. Sorgu metni örtüşmesi var (train-test 4, train-dev 4, dev-test 1 [ö]); sonuç "doküman düzeyinde sızıntılı set" notuyla verilir. 40 yinelenen doküman var.
 
 **TREC-COVID:** 42.140 dokümanın (%24,6) metni boş (yalnız başlık), 956 tam yinelenen doküman, 2 adet `-1` skoru var [ö]. Boş metinli dokümanda başlık kullanılır, `-1` satırları atılır. Yükleyicisi bu makinede 3 dakikada bitmedi [d].
