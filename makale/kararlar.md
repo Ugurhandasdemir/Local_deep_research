@@ -46,3 +46,11 @@ Kaynaklar:
 - **Gerekçe:** Kanıtlar `data/VERI-TARIFI.md` içinde, her biri ölçüldü / kaynaktan okundu / doğrulanamadı etiketiyle. Denetim alt agent'larla yapıldı, bulgular betikle yeniden üretilene kadar makalede "kanıtlandı" diye yazılmaz.
 - **Açık:** SciFact train küçük (809 sorgu). Daha büyük fine-tune verisi gerekirse yeni karar. Lisans doğrulamaları Y-56.
 - **Yeni maddeler:** Y-54..Y-58.
+
+## K-03 · 2026-11-11 · UDA ilk turda yalnız token F1, LLM-hakem sonraya (Y-57)
+
+- **Karar veren:** Yüksel. Uğurhan ve Hakan itiraz edecekse `tartışma` etiketiyle issue açsın.
+- **Karar:** UDA PaperTab ve PaperText ilk turda ~300 soruluk sabit alt kümeyle (seed 42, orantılı: 37 PaperTab, 263 PaperText) ve yalnız Qasper tarzı token F1 ile ölçülür. LLM-hakem şimdilik eklenmez.
+- **Gerekçe:** Sonuçlar Qasper'la karşılaştırılabilir kalır; hakem maliyet ve tutarsızlık getirir. Cevapların ~%71'i serbest cümle olduğu için token F1 kaba kalır, bu sınır makalede yazılır.
+- **Yeniden açma koşulu:** İlk tur sonuçları anlamsız derecede düşük çıkarsa hakem ayrı bir kararla eklenir.
+- **Dosyalar:** `data/uda_altkume.py`, `data/uda_f1.py`, `data/listeler/uda_altkume_v1.json`.

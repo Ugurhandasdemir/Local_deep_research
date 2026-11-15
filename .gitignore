@@ -59,6 +59,8 @@ data/*
 !data/LISANSLAR.md
 !data/indir.py
 !data/scifact_temiz.py
+!data/uda_altkume.py
+!data/uda_f1.py
 !data/listeler/
 *.pdf
 *.db
