@@ -57,6 +57,7 @@ agents.md
 data/*
 !data/VERI-TARIFI.md
 !data/LISANSLAR.md
+!data/MODELLER.md
 !data/indir.py
 !data/scifact_temiz.py
 !data/uda_altkume.py
