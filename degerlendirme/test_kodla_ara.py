@@ -1,6 +1,6 @@
-"""kodla_ara.py için kontrol (Y-55, adım 3b: dokuman_metni ve ara). Çalıştır:  python3 degerlendirme/test_kodla_ara.py
+"""kodla_ara.py için kontrol (Y-55, adım 3b: kodla, dokuman_metni ve ara). Çalıştır:  python3 degerlendirme/test_kodla_ara.py
 
-Gerçek model gerekmez: vektörler elle kurulur, böylece beklenen sıralama bilinir.
+Gerçek model gerekmez: vektörler elle kurulur ya da SahteModel kullanılır, beklenen sonuç bilinir.
 """
 import math
 import os
@@ -9,7 +9,24 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kodla_ara import ara, dokuman_metni  # noqa: E402
+from kodla_ara import MAKS_TOKEN, ara, dokuman_metni, kodla  # noqa: E402
+
+
+class SahteModel:
+    """SentenceTransformer gibi davranan basit nesne: encode() ve max_seq_length var.
+    Gelen metinleri ve ayarları kaydeder, böylece kodla()'nın ne gönderdiğini kontrol edebiliriz."""
+
+    max_seq_length = 8192  # gerçek modellerin geniş varsayılanını taklit eder (örn. BGE-M3)
+
+    def encode(self, metinler, batch_size, normalize_embeddings, convert_to_numpy, show_progress_bar):
+        self.gelen = list(metinler)
+        self.batch = batch_size
+        self.normalize_istendi = normalize_embeddings
+        # Her metin için [uzunluk, 1] vektörü; normalize istenirse uzunluğu 1 yapılır.
+        vek = np.array([[float(len(m)), 1.0] for m in self.gelen])
+        if normalize_embeddings:
+            vek = vek / np.linalg.norm(vek, axis=1, keepdims=True)
+        return vek
 
 
 def vek_cosine(skor):
@@ -22,6 +39,57 @@ SKORLAR = {"A": 0.31, "B": 0.88, "C": 0.12, "D": 0.75, "E": 0.54}
 IDLER = list(SKORLAR)
 DOK = np.array([vek_cosine(s) for s in SKORLAR.values()])
 SORGU = np.array([[1.0, 0.0]])
+
+
+def test_kodla_onek_eklenir():
+    m = SahteModel()
+    kodla(m, ["a", "bb"], onek="query: ")
+    assert m.gelen == ["query: a", "query: bb"]
+
+
+def test_kodla_onek_yoksa_metin_degismez():
+    m = SahteModel()
+    kodla(m, ["a", "bb"])
+    assert m.gelen == ["a", "bb"]
+
+
+def test_kodla_kirpma_siniri_512_ve_ozel():
+    m = SahteModel()
+    kodla(m, ["a"])
+    assert m.max_seq_length == MAKS_TOKEN == 512
+    kodla(m, ["a"], maks_token=2048)
+    assert m.max_seq_length == 2048
+
+
+def test_kodla_batch_iletilir():
+    m = SahteModel()
+    kodla(m, ["a"], batch=7)
+    assert m.batch == 7
+
+
+def test_kodla_sekil_tur_ve_normalize():
+    m = SahteModel()
+    vek = kodla(m, ["a", "bb", "ccc"])
+    assert m.normalize_istendi is True
+    assert vek.shape == (3, 2)
+    assert vek.dtype == np.float32
+    assert np.allclose(np.linalg.norm(vek, axis=1), 1.0, atol=1e-6)
+
+
+def test_kodla_bos_liste_hata_verir():
+    try:
+        kodla(SahteModel(), [])
+    except ValueError:
+        return
+    raise AssertionError("boş liste için ValueError beklenirdi")
+
+
+def test_kodla_ve_ara_birlikte():
+    # Sahte vektörler [uzunluk, 1] normalize: sorguyla aynı uzunluktaki metin en benzer çıkar.
+    m = SahteModel()
+    dok = kodla(m, ["aa", "aaaaaaaaaa", "aaaaa"])
+    sorgu = kodla(m, ["bbbbb"])
+    assert ara(sorgu, dok, ["kisa", "uzun", "orta"], k=3)[0][0] == "orta"
 
 
 def test_baslik_ve_metin():

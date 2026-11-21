@@ -1,7 +1,7 @@
 """Metinleri vektöre çevirir ve her sorgu için en benzer dokümanları bulur (Y-55, ADIM 3b).
 
-Durum: dokuman_metni() ve ara() hazır ve test edildi (test_kodla_ara.py). kodla() hâlâ iskelet:
-sentence-transformers ister ve bu ortamda kurulu değil.
+Durum: kodla(), dokuman_metni() ve ara() hazır ve sahte modelle test edildi (test_kodla_ara.py).
+kodla() gerçek bir SentenceTransformer ile henüz denenmedi (bu Mac'te kurulu değil, Colab'da denenecek).
 
 Tarif kuralları (data/VERI-TARIFI.md §2): seed 42, doküman en çok 512 token, öneki ekle.
 Bağımlılık: sentence-transformers, numpy (requirements.txt'e bak).
@@ -12,14 +12,32 @@ MAKS_TOKEN = 512
 SEED = 42
 
 
-def kodla(model, metinler, onek="", batch=32):
+def kodla(model, metinler, onek="", batch=32, maks_token=MAKS_TOKEN):
     """-> numpy dizisi, şekil (len(metinler), boyut), her satır L2-normalize.
 
-    TODO 1: her metnin başına `onek` ekle.
-    TODO 2: model.max_seq_length = MAKS_TOKEN (kırpma burada olur).
-    TODO 3: model.encode(...) ile vektörleri al; normalize_embeddings=True ile cosine = nokta çarpım olur.
+    model: sentence-transformers modeli (SentenceTransformer). Test için encode() ve max_seq_length'i
+           olan her nesne olur, gerçek model şart değil.
+    onek: her metnin başına eklenir (onekler.onek_al ile alınır). Bu fonksiyon yalnız metin önekli
+          modeller içindir; Jina v3 (task=) ve EmbeddingGemma 2 (istem adı) ayrı destek ister.
+    maks_token: kırpma sınırı. Tarif 512 der (varsayılan); Y-36'daki "daha uzun sınırla ikinci koşu"
+                kararı için başka bir sayı verilebilir.
     """
-    raise NotImplementedError
+    if len(metinler) == 0:
+        raise ValueError("metin listesi boş")
+    # Liste üreteci: her metnin önüne öneki ekler (onek "" ise metin değişmez).
+    metinler = [onek + metin for metin in metinler]
+    # Kırpma burada olur: model bu sayıdan uzun girdiyi keser. Model nesnesi kendi sınırını taşır
+    # (örn. BGE-M3 varsayılan 8192), o yüzden her çağrıda açıkça ayarlıyoruz.
+    model.max_seq_length = maks_token
+    vektorler = model.encode(
+        metinler,
+        batch_size=batch,                # metinler 32'şerli gruplar hâlinde modele girer
+        normalize_embeddings=True,       # her vektörü uzunluk 1 yapar, cosine = nokta çarpım olur
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+    # float32: bellek yarıya iner, ara() için yeterli doğruluk.
+    return np.asarray(vektorler, dtype=np.float32)
 
 
 def dokuman_metni(dokuman):
