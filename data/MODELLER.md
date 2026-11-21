@@ -8,15 +8,15 @@ Durum: **kartlardan okundu, 2026-11-21.** Hukuki yorum değildir. Model yayımla
 | Model | HF kimliği | Parametre | Vektör boyutu | Lisans | Sorgu ve belge biçimi |
 | --- | --- | --- | --- | --- | --- |
 | Qwen3-Embedding | `Qwen/Qwen3-Embedding-0.6B`, `-4B`, `-8B` | 0,6B, 4B, 8B | 1024, 2560, 4096 (hepsi esnek boyutu destekler) | Apache-2.0 | Yalnız sorguya talimat eklenir, belge olduğu gibi girer |
-| EmbeddingGemma 2 | `google/embeddinggemma-2` | 740M (metin kısmı 270M) | 768 (128, 256, 512'ye kısaltılabilir) | Apache-2.0 | Sorguya `SearchQuery`, belgeye `Document` istemi, başlıklı belge `title: {başlık} \| text: {metin}`, başlıksızsa `title: none` |
-| BGE-M3 | `BAAI/bge-m3` | bekliyor | 1024, bağlam 8192 token | MIT | Talimat gerekmiyor, sorgu ve belge düz metin |
-| Jina Embeddings v3 | `jinaai/jina-embeddings-v3` | bekliyor | 1024'e kadar (32 ile 1024 arası kısaltılabilir) | **CC BY-NC 4.0** (ticari olmayan) | `task="retrieval.query"` ile sorgu, `task="retrieval.passage"` ile belge |
-| Multilingual E5 Base | `intfloat/multilingual-e5-base` | bekliyor | 768 (12 katman) | MIT | Sorguya `query: `, belgeye `passage: ` ön eki, en fazla 512 token |
+| EmbeddingGemma 2 | `google/embeddinggemma-2` | 740M (metin kısmı 270M) | 768 (128, 256, 512'ye kısaltılabilir), bağlam 8K token | Apache-2.0 | Sorguya `SearchQuery`, belgeye `Document` istemi, başlıklı belge `title: {başlık} \| text: {metin}`, başlıksızsa `title: none` |
+| BGE-M3 | `BAAI/bge-m3` | bekliyor (ağırlıklar safetensors olarak yayımlanmadığı için HF sayfası sayı vermiyor) | 1024, bağlam 8192 token | MIT | Talimat gerekmiyor, sorgu ve belge düz metin |
+| Jina Embeddings v3 | `jinaai/jina-embeddings-v3` | ≈572M (HF API, safetensors toplamı) | 1024'e kadar (32 ile 1024 arası kısaltılabilir) | **CC BY-NC 4.0** (ticari olmayan) | `task="retrieval.query"` ile sorgu, `task="retrieval.passage"` ile belge |
+| Multilingual E5 Base | `intfloat/multilingual-e5-base` | ≈278M (HF API, safetensors toplamı) | 768 (12 katman) | MIT | Sorguya `query: `, belgeye `passage: ` ön eki, en fazla 512 token |
 
 ## Kaynaklar (kart sayfaları ve ham README'ler)
 
-- Qwen3: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B (boyut tablosu, lisans meta verisi `apache-2.0`; 4B ve 8B kartlarında da aynı)
-- EmbeddingGemma 2: https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2 (lisans Apache 2.0, 740M, 768 boyut, 8192 bağlam, `SearchQuery` ve `Document` istemleri)
+- Qwen3: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B (üç boyutun da tablosu bu kartta, lisans meta verisi `apache-2.0`; 4B ve 8B kartlarında da aynı)
+- EmbeddingGemma 2: `google/embeddinggemma-2` Hugging Face kartı (lisans meta verisi `apache-2.0`, 740M, 768, `SearchQuery` ve `Document` istemleri, bağlam "8K token"). Aynı bilgiler Google'ın model kartı sayfasında da okundu (https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2, bugün `gemma.ai` alan adına yönleniyor; "8,192 token" yazıyor). Alan adı yönlendirmesi elle teyit edilmeli.
 - BGE-M3: https://huggingface.co/BAAI/bge-m3 (lisans meta verisi `mit`; "BGE-M3 modeli artık sorgulara talimat eklenmesini gerektirmiyor")
 - Jina v3: https://huggingface.co/jinaai/jina-embeddings-v3 (lisans meta verisi `cc-by-nc-4.0`; iki görev adı)
 - E5: https://huggingface.co/intfloat/multilingual-e5-base (lisans meta verisi `mit`; "her giriş `query: ` ya da `passage: ` ile başlamalı")
@@ -35,12 +35,12 @@ Kartta görev açıklaması örnek olarak bir cümlelik ("Given a web search que
 ## Dikkat edilecekler
 
 - **Jina v3 ticari olmayan lisanslı.** Makalede sonuçlar ayrı işaretlenmeli, ticari kullanıma girilecekse model listeden çıkarılmalı. AWS ve Azure üzerinden ticari kullanım ayrı bir kanaldır, bizim kullanımımız değil.
-- **EmbeddingGemma'nın iki sürümü var.** Eski `google/embeddinggemma-300m` kartı kapılı (`gemma` lisansı, ham dosya 401 verdi), bu çalışmada okunamadı. Yeni sürüm kartı Apache-2.0. Y-41 "EmbeddingGemma 2" dediği için bu tabloda yeni sürüm esas alındı.
+- **EmbeddingGemma'nın iki sürümü var.** Eski `google/embeddinggemma-300m` kartının README'si kapılı (ham dosya erişim ister), ama lisansı sayfa meta verisinde herkese açık: `gemma`. Önek bilgisi okunamadı. Yeni sürüm kartı Apache-2.0. Y-41 "EmbeddingGemma 2" dediği için bu tabloda yeni sürüm esas alındı.
 - **EmbeddingGemma 2 "multimodal".** Metin dışında görüntü, video ve ses de alıyor. Parametre sayısı 740M, bunun yalnız 270M'i metin kısmı. Bellek hesabında toplam sayı geçerli olabilir, bu henüz ölçülmedi.
 - **VRAM (çıkarım, ölçülmedi):** hedef makinede 4 GB VRAM var. Qwen3 4B ve 8B modellerinin 4 GB'a sığması beklenmiyor. Quantization ya da CPU gerekebilir, bunun ayrıca kararı gerekiyor.
 
 ## Açık (bu PR'da doğrulanmadı)
 
-- BGE-M3, Jina v3 ve E5-base için toplam parametre sayısı kartta bulunamadı.
+- BGE-M3 için toplam parametre sayısı bulunamadı (safetensors yok, kartta da yazmıyor). Jina v3 ve E5-base sayıları HF API'den, README'den değil.
 - EmbeddingGemma 2'nin `SearchQuery` ve `Document` istemlerinin tam metni (sentence-transformers istem adıyla kullanılır, metin elle yazılmaz).
-- Eski `embeddinggemma-300m` kartının lisans ve önek bilgisi (kapılı).
+- Eski `embeddinggemma-300m` kartının önek bilgisi (README kapılı).
